@@ -1,0 +1,15 @@
+{
+  "name": "mod-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord moderation bot with Roblox in-game action logging",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
