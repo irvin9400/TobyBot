@@ -27,8 +27,8 @@ client.once('clientReady', () => {
   // ActivityType.Watching / Playing / Listening / Competing change the verb shown before the text
   // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
   client.user.setPresence({
-    status: 'online',
-    activities: [{ name: '**Listening**for reports', type: ActivityType.Listening }],
+    status: 'idle',
+    activities: [{ name: 'Watching for reports', type: ActivityType.Watching }],
   });
 
   // Start the webhook server once the bot is ready so it can fetch channels.
