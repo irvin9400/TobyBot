@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { logAction } = require('../utils/logger');
 const { hasModRole } = require('../utils/permissions');
+const { removeTempBan } = require('../utils/tempBanStore');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -26,6 +27,7 @@ module.exports = {
     }
 
     await interaction.guild.bans.remove(userId, reason);
+    removeTempBan(interaction.guildId, userId); // in case this was a temp ban that hadn't expired yet
 
     await logAction(interaction.client, {
       source: 'discord',

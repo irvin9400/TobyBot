@@ -3,6 +3,9 @@ const path = require('path');
 const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType } = require('discord.js');
 const config = require('./config');
 const { createWebhookServer } = require('./webhook/server');
+const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
+const { addCase } = require('./utils/caseStore');
+const { logAction } = require('./utils/logger');
 
 const client = new Client({
   intents: [
@@ -28,11 +31,58 @@ client.once('clientReady', () => {
   // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
   client.user.setPresence({
     status: 'online',
-    activities: [{ name: 'Watching for rulebreakers!', type: ActivityType.Watching }],
+    activities: [{ name: 'the school', type: ActivityType.Watching }],
   });
 
   // Start the webhook server once the bot is ready so it can fetch channels.
   createWebhookServer(client);
+
+  // Temp bans: every minute, lift any ban from /ban whose time is up. Checking on an interval
+  // (rather than one setTimeout per ban) means this still works correctly even if the bot restarts
+  // in between — nothing depends on a timer surviving a restart, just this file on disk.
+  const TEMP_BAN_CHECK_INTERVAL_MS = 60_000;
+
+  async function checkTempBans() {
+    const now = Date.now();
+    for (const { guildId, userId, expiresAt, reason } of getAllTempBans()) {
+      if (expiresAt > now) continue;
+
+      try {
+        const guild = await client.guilds.fetch(guildId);
+        const stillBanned = await guild.bans.fetch(userId).catch(() => null);
+
+        if (stillBanned) {
+          await guild.bans.remove(userId, 'Temporary ban expired');
+
+          const record = addCase(guildId, {
+            userId,
+            userTag: stillBanned.user.tag,
+            moderatorTag: 'Automatic (temp ban expired)',
+            action: 'unban',
+            reason: `Temporary ban expired (was: ${reason})`,
+          });
+
+          await logAction(client, {
+            source: 'discord',
+            action: 'unban',
+            moderator: 'Automatic (temp ban expired)',
+            target: stillBanned.user.tag,
+            reason: `Temporary ban expired (was: ${reason})`,
+            caseNumber: record.case,
+          });
+        }
+      } catch (err) {
+        console.error(`Temp ban check failed for user ${userId} in guild ${guildId}:`, err);
+      } finally {
+        // Whether it worked, failed, or they were already unbanned by hand — stop tracking it, so a
+        // persistent failure (e.g. the bot lost access to the guild) doesn't retry forever.
+        removeTempBan(guildId, userId);
+      }
+    }
+  }
+
+  checkTempBans();
+  setInterval(checkTempBans, TEMP_BAN_CHECK_INTERVAL_MS);
 });
 
 client.on('interactionCreate', async (interaction) => {
