@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Collection, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType } = require('discord.js');
 const config = require('./config');
 const { createWebhookServer } = require('./webhook/server');
 
@@ -22,6 +22,15 @@ for (const file of fs.readdirSync(commandsPath).filter((f) => f.endsWith('.js'))
 
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  // The bot's status: the colored dot (online/idle/dnd/invisible) and the text under its name.
+  // ActivityType.Watching / Playing / Listening / Competing change the verb shown before the text
+  // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
+  client.user.setPresence({
+    status: 'online',
+    activities: [{ name: 'the school', type: ActivityType.Watching }],
+  });
+
   // Start the webhook server once the bot is ready so it can fetch channels.
   createWebhookServer(client);
 });
