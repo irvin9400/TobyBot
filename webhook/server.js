@@ -2,19 +2,17 @@ const express = require('express');
 const config = require('../config');
 const { logAction } = require('../utils/logger');
 
-// Explicit allow-list of in-game actions this bot will log. Anything not on
-// this list is rejected — including things like "Lock Entrance" /
-// "Unlock Entrance", which are intentionally left off.
-const ALLOWED_ACTIONS = new Set([
-  'ban',
-  'unban',
-  'kick',
-  'warn',
-  'jail',
-  'unjail',
-  'freeze',
-  'unfreeze',
+// Explicit deny-list: these are NEVER logged, no matter what the game sends. This is the one place
+// that decides that, so if Roblox ever sends "doors_set" (the entrance toggle) by mistake, or a
+// future action you don't want logged, add its name here rather than relying on the Roblox side.
+const EXCLUDED_ACTIONS = new Set([
+  'doors_set',
 ]);
+
+// Actions that create a numbered case in the Roblox admin panel go to the "mod log" channel
+// (GAME_LOG_CHANNEL_ID). Everything else goes to the "action log" channel (GAME_ACTION_LOG_CHANNEL_ID,
+// or GAME_LOG_CHANNEL_ID too if you haven't set a second one).
+const CASE_ACTIONS = new Set(['ban', 'unban', 'kick', 'warn', 'jail', 'unjail']);
 
 function createWebhookServer(client) {
   const app = express();
@@ -28,7 +26,7 @@ function createWebhookServer(client) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { action, moderator, target, reason, extra } = req.body || {};
+    const { action, moderator, target, reason, extra, case: caseNumber, duration, evidence, placeId, server } = req.body || {};
 
     if (!action || typeof action !== 'string') {
       return res.status(400).json({ error: 'Missing "action" field' });
@@ -36,13 +34,10 @@ function createWebhookServer(client) {
 
     const normalizedAction = action.toLowerCase().trim();
 
-    if (!ALLOWED_ACTIONS.has(normalizedAction)) {
-      // Silently-but-explicitly reject anything not on the allow-list
-      // (e.g. "Lock Entrance", "Unlock Entrance", or anything else you
-      // don't want mirrored into Discord).
+    if (!normalizedAction || EXCLUDED_ACTIONS.has(normalizedAction)) {
+      // Explicitly excluded (e.g. the entrance toggle), or empty.
       return res.status(400).json({
         error: `Action "${action}" is not logged by this bot.`,
-        allowed: Array.from(ALLOWED_ACTIONS),
       });
     }
 
@@ -52,11 +47,17 @@ function createWebhookServer(client) {
 
     await logAction(client, {
       source: 'game',
+      category: CASE_ACTIONS.has(normalizedAction) ? 'case' : 'action',
       action: normalizedAction,
       moderator: moderator || 'In-game system',
       target,
       reason,
       extra,
+      caseNumber: typeof caseNumber === 'number' ? caseNumber : undefined,
+      duration: typeof duration === 'string' ? duration.slice(0, 60) : undefined,
+      evidence: typeof evidence === 'string' ? evidence.slice(0, 300) : undefined,
+      placeId: typeof placeId === 'number' ? placeId : undefined,
+      server: typeof server === 'string' ? server.slice(0, 60) : undefined,
     });
 
     return res.status(200).json({ ok: true });
@@ -69,4 +70,4 @@ function createWebhookServer(client) {
   return app;
 }
 
-module.exports = { createWebhookServer, ALLOWED_ACTIONS };
+module.exports = { createWebhookServer, EXCLUDED_ACTIONS };

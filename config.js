@@ -15,6 +15,9 @@ module.exports = {
 
   modLogChannelId: requireEnv('MOD_LOG_CHANNEL_ID'),
   gameLogChannelId: requireEnv('GAME_LOG_CHANNEL_ID'),
+  // Optional: a separate channel for game actions that don't create a case (freeze/unfreeze).
+  // Leave blank to send those to GAME_LOG_CHANNEL_ID too, in the same channel as everything else.
+  gameActionLogChannelId: process.env.GAME_ACTION_LOG_CHANNEL_ID || null,
 
   modRoleIds: (process.env.MOD_ROLE_IDS || '')
     .split(',')

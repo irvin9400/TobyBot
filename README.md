@@ -3,7 +3,7 @@
 A moderation bot with two halves:
 
 1. **Discord-side commands** — `/kick`, `/ban`, `/unban`, `/timeout`, `/untimeout`, `/nickname`, `/role`, `/warn` — each logged to a mod-log channel.
-2. **In-game action logger** — a small webhook server your Roblox game calls to mirror moderation events (`ban`, `unban`, `kick`, `warn`, `jail`, `unjail`, `freeze`, `unfreeze`) into a separate Discord log channel. Anything not explicitly on that allow-list (e.g. "Lock Entrance" / "Unlock Entrance") is rejected and never logged.
+2. **In-game action logger** — a small webhook server your Roblox game calls to mirror moderation and admin-panel actions into Discord, in two channels: actions that create a case in the Roblox admin panel (`ban`, `unban`, `kick`, `warn`, `jail`, `unjail`) go to your mod-log channel, and everything else your admin panel does (`freeze`, `speed`, `health`, announcements, and so on) goes to a separate action-log channel. Only the entrance-door toggle (`doors_set`) is excluded, in `webhook/server.js`'s `EXCLUDED_ACTIONS` — add more names there if you want anything else left out.
 
 ## 1. Set up the Discord application
 
@@ -24,10 +24,13 @@ Fill in `.env`:
 
 - `DISCORD_TOKEN`, `CLIENT_ID` — from the Developer Portal
 - `GUILD_ID` — your server's ID (recommended while testing — instant command updates)
-- `MOD_LOG_CHANNEL_ID` — channel for Discord-side command logs
-- `GAME_LOG_CHANNEL_ID` — channel for in-game action logs
+- `MOD_LOG_CHANNEL_ID` — channel for Discord-side command logs (`/ban`, `/kick`, etc.)
+- `GAME_LOG_CHANNEL_ID` — channel for in-game actions that create a case: `ban`, `unban`, `kick`, `warn`, `jail`, `unjail`
+- `GAME_ACTION_LOG_CHANNEL_ID` — optional, a separate channel for in-game actions that don't create a case: `freeze`, `unfreeze`. Leave blank to send those to `GAME_LOG_CHANNEL_ID` too.
 - `MOD_ROLE_IDS` — optional comma-separated role IDs allowed to use commands, on top of Discord's own permission checks
 - `WEBHOOK_PORT`, `WEBHOOK_SECRET` — for the Roblox webhook server; make the secret long and random
+
+See the "Deploy to Railway" section below for the full list of variable names to set there.
 
 ## 3. Deploy commands and run
 
@@ -85,9 +88,9 @@ logModerationAction("jail", "AdminUser", "TargetPlayer", "Exploiting")
 
 Remember to enable **HTTP Requests** under Game Settings > Security in Roblox Studio.
 
-### Allowed in-game actions
+### Excluded in-game actions
 
-Only these action names are accepted and logged: `ban`, `unban`, `kick`, `warn`, `jail`, `unjail`, `freeze`, `unfreeze`. Anything else — including things like `lock entrance` / `unlock entrance` — is rejected with a 400 response and never posted to Discord. To change what's logged, edit `ALLOWED_ACTIONS` in `webhook/server.js`.
+Every action name is accepted and logged **except** the ones listed in `EXCLUDED_ACTIONS` in `webhook/server.js`, which starts with just `doors_set` (the entrance toggle). Add more names there — lowercase — for anything else you don't want mirrored into Discord.
 
 ## Project structure
 
