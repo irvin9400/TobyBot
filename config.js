@@ -18,6 +18,8 @@ module.exports = {
   // Optional: a separate channel for game actions that don't create a case (freeze/unfreeze).
   // Leave blank to send those to GAME_LOG_CHANNEL_ID too, in the same channel as everything else.
   gameActionLogChannelId: process.env.GAME_ACTION_LOG_CHANNEL_ID || null,
+  // Where new/claimed/closed mod calls from Roblox are posted. Required for /mod-call to do anything.
+  modCallChannelId: process.env.MOD_CALL_CHANNEL_ID || null,
 
   modRoleIds: (process.env.MOD_ROLE_IDS || '')
     .split(',')

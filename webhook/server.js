@@ -63,6 +63,51 @@ function createWebhookServer(client) {
     return res.status(200).json({ ok: true });
   });
 
+  // A player pressed the in-game "Mod Call" button, or an admin claimed/closed one (from
+  // ModCallServer.server.lua). This posts straight to modCallChannelId — it's not a moderation
+  // "case" or "action" like /game-log, so it doesn't go through EXCLUDED_ACTIONS/CASE_ACTIONS at all.
+  app.post('/mod-call', async (req, res) => {
+    const auth = req.get('authorization') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (token !== config.webhookSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { event, caller, target, message, moderator, resolution, placeId, jobId } = req.body || {};
+    if (!event || !['new', 'claimed', 'closed'].includes(event)) {
+      return res.status(400).json({ error: 'Missing or invalid "event" field (new/claimed/closed)' });
+    }
+    if (!caller) {
+      return res.status(400).json({ error: 'Missing "caller" field' });
+    }
+
+    if (!config.modCallChannelId) {
+      console.warn('[webhook] MOD_CALL_CHANNEL_ID is not set, skipping mod call log.');
+      return res.status(200).json({ ok: true }); // don't fail the game's request over a missing setting
+    }
+
+    const channel = await client.channels.fetch(config.modCallChannelId).catch(() => null);
+    if (!channel) {
+      console.warn(`[webhook] Could not fetch mod call channel ${config.modCallChannelId}`);
+      return res.status(200).json({ ok: true });
+    }
+
+    const { buildModCallEmbed } = require('../utils/logger');
+    const embed = buildModCallEmbed({
+      event,
+      caller: String(caller).slice(0, 100),
+      target: target ? String(target).slice(0, 100) : undefined,
+      message: message ? String(message).slice(0, 300) : undefined,
+      moderator: moderator ? String(moderator).slice(0, 100) : undefined,
+      resolution: resolution ? String(resolution).slice(0, 100) : undefined,
+      placeId,
+      jobId,
+    });
+
+    await channel.send({ embeds: [embed] }).catch((err) => console.error('[webhook] Failed to send mod call embed:', err));
+    return res.status(200).json({ ok: true });
+  });
+
   app.listen(config.webhookPort, () => {
     console.log(`Webhook server listening on port ${config.webhookPort}`);
   });

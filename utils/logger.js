@@ -99,4 +99,40 @@ async function logAction(client, { source, category, action, moderator, target, 
   });
 }
 
-module.exports = { logAction };
+const MOD_CALL_TITLES = {
+	new: '🚨 New Mod Call',
+	claimed: '👋 Mod Call Claimed',
+	closed: '✅ Mod Call Closed',
+};
+const MOD_CALL_COLORS = {
+	new: 0xff5a5a,
+	claimed: 0xffa03c,
+	closed: 0x4bdc5a,
+};
+
+// A mod call event from Roblox (ModCallServer.server.lua), via the /mod-call webhook route.
+// This is separate from buildEmbed/logAction above: mod calls aren't a moderation "case" or
+// "action" on a player, they're a live help request, so they get their own simpler embed.
+function buildModCallEmbed({ event, caller, target, message, moderator, resolution, placeId, jobId }) {
+	const embed = new EmbedBuilder()
+		.setColor(MOD_CALL_COLORS[event] || 0x5865f2)
+		.setTitle(MOD_CALL_TITLES[event] || 'Mod Call')
+		.addFields({ name: 'Caller', value: caller, inline: true });
+
+	if (target) embed.addFields({ name: 'Reporting', value: target, inline: true });
+	if (moderator) embed.addFields({ name: event === 'claimed' ? 'Claimed by' : 'Closed by', value: moderator, inline: true });
+	if (message) embed.addFields({ name: 'Message', value: message });
+	if (resolution) embed.addFields({ name: 'Resolution', value: resolution, inline: true });
+
+	if (placeId || jobId) {
+		const parts = [];
+		if (placeId) parts.push(`Place ${placeId}`);
+		if (jobId) parts.push(`Server ${String(jobId).slice(0, 8)}`);
+		embed.setFooter({ text: parts.join(' | ') });
+	}
+
+	embed.setTimestamp();
+	return embed;
+}
+
+module.exports = { logAction, buildModCallEmbed };
