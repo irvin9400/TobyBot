@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { logAction } = require('../utils/logger');
 const { hasModRole } = require('../utils/permissions');
+const { addCase } = require('../utils/caseStore');
 
 // Discord's max timeout duration is 28 days.
 const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000;
@@ -51,6 +52,15 @@ module.exports = {
 
     await target.timeout(durationMs, reason);
 
+    const record = addCase(interaction.guildId, {
+      userId: target.user.id,
+      userTag: target.user.tag,
+      moderatorTag: interaction.user.tag,
+      action: 'timeout',
+      reason,
+      extra: { Duration: durationStr },
+    });
+
     await logAction(interaction.client, {
       source: 'discord',
       action: 'timeout',
@@ -58,8 +68,9 @@ module.exports = {
       target: target.user.tag,
       reason,
       extra: { Duration: durationStr },
+      caseNumber: record.case,
     });
 
-    await interaction.reply({ content: `✅ Timed out **${target.user.tag}** for ${durationStr}.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Timed out **${target.user.tag}** for ${durationStr}. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
   },
 };

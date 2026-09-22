@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { logAction } = require('../utils/logger');
 const { hasModRole } = require('../utils/permissions');
+const { addCase } = require('../utils/caseStore');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -29,14 +30,23 @@ module.exports = {
 
     await target.kick(reason);
 
+    const record = addCase(interaction.guildId, {
+      userId: target.user.id,
+      userTag: target.user.tag,
+      moderatorTag: interaction.user.tag,
+      action: 'kick',
+      reason,
+    });
+
     await logAction(interaction.client, {
       source: 'discord',
       action: 'kick',
       moderator: interaction.user.tag,
       target: target.user.tag,
       reason,
+      caseNumber: record.case,
     });
 
-    await interaction.reply({ content: `✅ Kicked **${target.user.tag}**.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Kicked **${target.user.tag}**. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
   },
 };

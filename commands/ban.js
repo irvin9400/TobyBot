@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { logAction } = require('../utils/logger');
 const { hasModRole } = require('../utils/permissions');
+const { addCase } = require('../utils/caseStore');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -37,14 +38,23 @@ module.exports = {
       deleteMessageSeconds: deleteDays * 86400,
     });
 
+    const record = addCase(interaction.guildId, {
+      userId: user.id,
+      userTag: user.tag,
+      moderatorTag: interaction.user.tag,
+      action: 'ban',
+      reason,
+    });
+
     await logAction(interaction.client, {
       source: 'discord',
       action: 'ban',
       moderator: interaction.user.tag,
       target: user.tag,
       reason,
+      caseNumber: record.case,
     });
 
-    await interaction.reply({ content: `✅ Banned **${user.tag}**.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Banned **${user.tag}**. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
   },
 };

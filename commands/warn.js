@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { logAction } = require('../utils/logger');
 const { hasModRole } = require('../utils/permissions');
+const { addCase } = require('../utils/caseStore');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -20,17 +21,26 @@ module.exports = {
     const user = interaction.options.getUser('user');
     const reason = interaction.options.getString('reason');
 
+    const record = addCase(interaction.guildId, {
+      userId: user.id,
+      userTag: user.tag,
+      moderatorTag: interaction.user.tag,
+      action: 'warn',
+      reason,
+    });
+
     await logAction(interaction.client, {
       source: 'discord',
       action: 'warn',
       moderator: interaction.user.tag,
       target: user.tag,
       reason,
+      caseNumber: record.case,
     });
 
     // Best-effort DM notice; ignore if the user has DMs closed.
-    await user.send(`You have been warned in **${interaction.guild.name}**. Reason: ${reason}`).catch(() => {});
+    await user.send(`You have been warned in **${interaction.guild.name}**. Reason: ${reason} (Case #${record.case})`).catch(() => {});
 
-    await interaction.reply({ content: `✅ Warned **${user.tag}**.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Warned **${user.tag}**. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
   },
 };
