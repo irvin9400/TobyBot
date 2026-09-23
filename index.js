@@ -3,6 +3,7 @@ const path = require('path');
 const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType } = require('discord.js');
 const config = require('./config');
 const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = require('./utils/tickets');
+const { handleChoice: handleRpsChoice } = require('./utils/rps');
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
@@ -32,7 +33,7 @@ client.once('clientReady', () => {
   // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
   client.user.setPresence({
     status: 'online',
-    activities: [{ name: 'Listening for tickets', type: ActivityType.Listening }],
+    activities: [{ name: 'Watching for tickets', type: ActivityType.Watching }],
   });
 
   // Let everyone watching the status channel know the bot is back, after a deploy or a restart
@@ -113,12 +114,14 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // The "Open Ticket" / "Close Ticket" buttons
+    // The "Open Ticket" / "Close Ticket" buttons, and the Rock Paper Scissors move buttons
     if (interaction.isButton()) {
       if (interaction.customId === OPEN_BUTTON_ID) {
         await openTicket(interaction);
       } else if (interaction.customId === CLOSE_BUTTON_ID) {
         await closeTicket(interaction);
+      } else if (interaction.customId.startsWith('rps:')) {
+        await handleRpsChoice(interaction);
       }
     }
   } catch (error) {

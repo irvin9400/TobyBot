@@ -25,8 +25,23 @@ const instantGuildId = guildArg && /^\d+$/.test(guildArg) ? guildArg : null;
 
 const rest = new REST().setToken(config.token);
 
+// node deploy-commands.js --clear-guild=1550286535944052806
+// Wipes every guild-specific command for that server, without touching your global commands.
+// Use this if you see every command doubled in Discord — that happens when a server has both a
+// global and a guild-specific registration for the same commands at once (Discord always lists
+// both, even when the names match). This removes the guild-specific half.
+const clearGuildFlag = process.argv.slice(2).find((arg) => arg.startsWith('--clear-guild='));
+const clearGuildId = clearGuildFlag ? clearGuildFlag.split('=')[1] : null;
+
 (async () => {
   try {
+    if (clearGuildId) {
+      console.log(`Clearing guild-specific commands for ${clearGuildId}...`);
+      await rest.put(Routes.applicationGuildCommands(config.clientId, clearGuildId), { body: [] });
+      console.log(`Done. That server now only sees your global commands.`);
+      return;
+    }
+
     console.log(`Deploying ${commands.length} slash command(s)...`);
 
     if (instantGuildId) {
