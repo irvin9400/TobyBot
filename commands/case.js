@@ -28,7 +28,6 @@ module.exports = {
 
     await interaction.reply({
       content: `Removed case #${number} (**${removed.action.toUpperCase()}** on ${removed.userTag}). This only deletes the record — it doesn't lift a ban or timeout by itself.`,
-      flags: MessageFlags.Ephemeral,
     });
   },
 };

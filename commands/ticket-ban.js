@@ -29,6 +29,6 @@ module.exports = {
       reason: reason || undefined,
     });
 
-    await interaction.reply({ content: `✅ **${user.tag}** can no longer open tickets.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ **${user.tag}** can no longer open tickets.` });
   },
 };

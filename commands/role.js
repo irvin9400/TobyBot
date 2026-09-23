@@ -45,7 +45,7 @@ module.exports = {
         target: target.user.tag,
         extra: { Role: role.name, Change: 'Added' },
       });
-      return interaction.reply({ content: `✅ Added **${role.name}** to **${target.user.tag}**.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `✅ Added **${role.name}** to **${target.user.tag}**.` });
     }
 
     // remove
@@ -57,6 +57,6 @@ module.exports = {
       target: target.user.tag,
       extra: { Role: role.name, Change: 'Removed' },
     });
-    return interaction.reply({ content: `✅ Removed **${role.name}** from **${target.user.tag}**.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `✅ Removed **${role.name}** from **${target.user.tag}**.` });
   },
 };

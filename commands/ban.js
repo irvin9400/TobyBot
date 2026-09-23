@@ -81,6 +81,6 @@ module.exports = {
     });
 
     const lengthText = durationMs ? `for ${formatDuration(durationMs)}` : 'permanently';
-    await interaction.reply({ content: `✅ Banned **${user.tag}** ${lengthText}. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Banned **${user.tag}** ${lengthText}. (Case #${record.case})` });
   },
 };

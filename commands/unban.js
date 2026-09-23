@@ -37,6 +37,6 @@ module.exports = {
       reason,
     });
 
-    await interaction.reply({ content: `✅ Unbanned **${ban.user.tag}**.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Unbanned **${ban.user.tag}**.` });
   },
 };

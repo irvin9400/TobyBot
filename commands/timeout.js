@@ -71,6 +71,6 @@ module.exports = {
       caseNumber: record.case,
     });
 
-    await interaction.reply({ content: `✅ Timed out **${target.user.tag}** for ${durationStr}. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Timed out **${target.user.tag}** for ${durationStr}. (Case #${record.case})` });
   },
 };

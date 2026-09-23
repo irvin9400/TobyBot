@@ -29,6 +29,6 @@ module.exports = {
       target: user.tag,
     });
 
-    await interaction.reply({ content: `✅ **${user.tag}** can open tickets again.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ **${user.tag}** can open tickets again.` });
   },
 };

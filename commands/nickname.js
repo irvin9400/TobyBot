@@ -40,7 +40,7 @@ module.exports = {
         target: target.user.tag,
         extra: { From: oldNick, To: newNick },
       });
-      return interaction.reply({ content: `✅ Set **${target.user.tag}**'s nickname to "${newNick}".`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `✅ Set **${target.user.tag}**'s nickname to "${newNick}".` });
     }
 
     // reset
@@ -52,6 +52,6 @@ module.exports = {
       target: target.user.tag,
       extra: { From: oldNick, To: '(reset)' },
     });
-    return interaction.reply({ content: `✅ Reset **${target.user.tag}**'s nickname.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `✅ Reset **${target.user.tag}**'s nickname.` });
   },
 };

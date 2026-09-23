@@ -41,6 +41,6 @@ module.exports = {
     // Best-effort DM notice; ignore if the user has DMs closed.
     await user.send(`You have been warned in **${interaction.guild.name}**. Reason: ${reason} (Case #${record.case})`).catch(() => {});
 
-    await interaction.reply({ content: `✅ Warned **${user.tag}**. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Warned **${user.tag}**. (Case #${record.case})` });
   },
 };

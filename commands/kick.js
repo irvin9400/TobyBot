@@ -47,6 +47,6 @@ module.exports = {
       caseNumber: record.case,
     });
 
-    await interaction.reply({ content: `✅ Kicked **${target.user.tag}**. (Case #${record.case})`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Kicked **${target.user.tag}**. (Case #${record.case})` });
   },
 };

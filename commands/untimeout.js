@@ -34,6 +34,6 @@ module.exports = {
       reason,
     });
 
-    await interaction.reply({ content: `✅ Removed timeout from **${target.user.tag}**.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Removed timeout from **${target.user.tag}**.` });
   },
 };
