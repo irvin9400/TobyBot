@@ -50,8 +50,22 @@ async function fetchAllMessages(channel) {
   return all;
 }
 
+// Stops someone from rapidly opening/closing tickets to spam-create channels. Keyed per user, so
+// one person spamming doesn't affect anyone else.
+const TICKET_COOLDOWN_MS = 30_000;
+const lastOpenedAt = new Map();
+
 async function openTicket(interaction) {
   const { guild, user } = interaction;
+
+  const lastOpen = lastOpenedAt.get(user.id) || 0;
+  const remaining = TICKET_COOLDOWN_MS - (Date.now() - lastOpen);
+  if (remaining > 0) {
+    return interaction.reply({
+      content: `Please wait ${Math.ceil(remaining / 1000)} more second(s) before opening another ticket.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
   if (!config.ticketSupportRoleId) {
     return interaction.reply({ content: "Tickets aren't set up yet — TICKET_SUPPORT_ROLE_ID is missing.", flags: MessageFlags.Ephemeral });
@@ -79,6 +93,7 @@ async function openTicket(interaction) {
   });
 
   setTicket(guild.id, user.id, channel.id);
+  lastOpenedAt.set(user.id, Date.now());
 
   const embed = new EmbedBuilder()
     .setTitle('🎫 Ticket opened')

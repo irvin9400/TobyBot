@@ -35,6 +35,13 @@ client.once('clientReady', () => {
     activities: [{ name: 'Listening for tickets', type: ActivityType.Listening }],
   });
 
+  // Let everyone watching the status channel know the bot is back, after a deploy or a restart
+  if (config.statusChannelId) {
+    client.channels.fetch(config.statusChannelId)
+      .then((channel) => channel.send('✅ **Back online.**'))
+      .catch((err) => console.error('[status] Failed to send the online message:', err));
+  }
+
   // Start the webhook server once the bot is ready so it can fetch channels.
   createWebhookServer(client);
 
@@ -124,5 +131,32 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 });
+
+// Railway (and most hosts) send SIGTERM to ask a process to stop cleanly before killing it outright
+// — for a deploy, that's the moment just before the new version replaces this one. Posting here,
+// then exiting, is what makes the "going down" message actually happen before the bot disconnects.
+let shuttingDown = false;
+
+async function announceShutdown(signal) {
+  if (shuttingDown) return; // don't double-post if a second signal arrives while we're already exiting
+  shuttingDown = true;
+
+  console.log(`Received ${signal}, shutting down...`);
+
+  if (config.statusChannelId) {
+    try {
+      const channel = await client.channels.fetch(config.statusChannelId);
+      await channel.send('🔧 **Going down for an update.** Back shortly.');
+    } catch (err) {
+      console.error('[status] Failed to send the going-down message:', err);
+    }
+  }
+
+  client.destroy();
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => announceShutdown('SIGTERM'));
+process.on('SIGINT', () => announceShutdown('SIGINT'));
 
 client.login(config.token);

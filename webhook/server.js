@@ -1,4 +1,6 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 const config = require('../config');
 const { logAction } = require('../utils/logger');
 
@@ -14,15 +16,39 @@ const EXCLUDED_ACTIONS = new Set([
 // or GAME_LOG_CHANNEL_ID too if you haven't set a second one).
 const CASE_ACTIONS = new Set(['ban', 'unban', 'kick', 'warn', 'jail', 'unjail']);
 
+// A plain "!==" comparison leaks tiny timing differences that could theoretically help someone
+// guess the secret one character at a time. This compares in constant time instead. Different
+// lengths never match (and can't be timed against each other), so this is safe even though
+// timingSafeEqual itself requires equal-length buffers.
+function secretsMatch(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function createWebhookServer(client) {
   const app = express();
   app.use(express.json());
+
+  // Limits how often each IP can hit these routes, so even a leaked WEBHOOK_SECRET can't be used to
+  // flood your log channels indefinitely. Roblox only ever needs to log actions as fast as your
+  // moderators can click buttons in-game, so this is generous enough to never get in the way.
+  const webhookLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Slow down.' },
+  });
+  app.use('/game-log', webhookLimiter);
+  app.use('/mod-call', webhookLimiter);
 
   app.post('/game-log', async (req, res) => {
     const auth = req.get('authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
 
-    if (token !== config.webhookSecret) {
+    if (!token || !secretsMatch(token, config.webhookSecret)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -69,7 +95,7 @@ function createWebhookServer(client) {
   app.post('/mod-call', async (req, res) => {
     const auth = req.get('authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (token !== config.webhookSecret) {
+    if (!token || !secretsMatch(token, config.webhookSecret)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 

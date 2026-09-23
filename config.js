@@ -37,4 +37,7 @@ module.exports = {
   // for local development.
   webhookPort: parseInt(process.env.PORT, 10) || parseInt(process.env.WEBHOOK_PORT, 10) || 3000,
   webhookSecret: requireEnv('WEBHOOK_SECRET'),
+
+  // Posts here right after startup, and right before shutting down for a deploy/restart.
+  statusChannelId: process.env.STATUS_CHANNEL_ID || null,
 };
