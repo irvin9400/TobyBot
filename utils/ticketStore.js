@@ -50,4 +50,35 @@ function removeTicketByChannel(guildId, channelId) {
   return null;
 }
 
-module.exports = { getOpenTicketChannelId, setTicket, removeTicketByChannel };
+// Bans a user from opening tickets (separate from a real Discord server ban).
+function banFromTickets(guildId, userId, { reason, moderatorTag }) {
+  const data = readAll();
+  data[guildId] = data[guildId] || {};
+  data[guildId].bans = data[guildId].bans || {};
+  data[guildId].bans[userId] = { reason: reason || null, moderatorTag, bannedAt: Date.now() };
+  writeAll(data);
+}
+
+function unbanFromTickets(guildId, userId) {
+  const data = readAll();
+  const bans = data[guildId]?.bans;
+  if (!bans || !bans[userId]) return false;
+  delete bans[userId];
+  writeAll(data);
+  return true;
+}
+
+// Returns the ban record ({ reason, moderatorTag, bannedAt }), or null if they aren't banned
+function getTicketBan(guildId, userId) {
+  const data = readAll();
+  return data[guildId]?.bans?.[userId] || null;
+}
+
+module.exports = {
+  getOpenTicketChannelId,
+  setTicket,
+  removeTicketByChannel,
+  banFromTickets,
+  unbanFromTickets,
+  getTicketBan,
+};

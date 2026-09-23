@@ -9,7 +9,7 @@ const {
   AttachmentBuilder,
 } = require('discord.js');
 const config = require('../config');
-const { getOpenTicketChannelId, setTicket, removeTicketByChannel } = require('./ticketStore');
+const { getOpenTicketChannelId, setTicket, removeTicketByChannel, getTicketBan } = require('./ticketStore');
 
 const OPEN_BUTTON_ID = 'ticket-open';
 const CLOSE_BUTTON_ID = 'ticket-close';
@@ -57,6 +57,15 @@ const lastOpenedAt = new Map();
 
 async function openTicket(interaction) {
   const { guild, user } = interaction;
+
+  const ban = getTicketBan(guild.id, user.id);
+  if (ban) {
+    const reasonText = ban.reason ? ` Reason: ${ban.reason}` : '';
+    return interaction.reply({
+      content: `You've been banned from opening tickets.${reasonText}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
   const lastOpen = lastOpenedAt.get(user.id) || 0;
   const remaining = TICKET_COOLDOWN_MS - (Date.now() - lastOpen);
