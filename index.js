@@ -32,7 +32,7 @@ client.once('clientReady', () => {
   // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
   client.user.setPresence({
     status: 'online',
-    activities: [{ name: 'the school', type: ActivityType.Watching }],
+    activities: [{ name: 'Listening for tickets', type: ActivityType.Listening }],
   });
 
   // Start the webhook server once the bot is ready so it can fetch channels.
