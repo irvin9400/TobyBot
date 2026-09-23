@@ -26,6 +26,12 @@ module.exports = {
     .map((id) => id.trim())
     .filter(Boolean),
 
+  // Tickets: who can see and respond to them, and (optionally) where closed transcripts go.
+  ticketSupportRoleId: process.env.TICKET_SUPPORT_ROLE_ID || null,
+  ticketLogChannelId: process.env.TICKET_LOG_CHANNEL_ID || null,
+  // Optional: put ticket channels under this category instead of loose in the channel list.
+  ticketCategoryId: process.env.TICKET_CATEGORY_ID || null,
+
   // Hosting platforms like Railway assign their own port via PORT and
   // expect the app to listen on it. WEBHOOK_PORT is used as a fallback
   // for local development.

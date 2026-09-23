@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType } = require('discord.js');
 const config = require('./config');
+const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = require('./utils/tickets');
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
@@ -31,7 +32,7 @@ client.once('clientReady', () => {
   // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
   client.user.setPresence({
     status: 'online',
-    activities: [{ name: 'Watching for reports!', type: ActivityType.Watching }],
+    activities: [{ name: 'the school', type: ActivityType.Watching }],
   });
 
   // Start the webhook server once the bot is ready so it can fetch channels.
@@ -102,6 +103,16 @@ client.on('interactionCreate', async (interaction) => {
         (cmd) => cmd.handleModalSubmit && interaction.customId.startsWith(`${prefix}:`) && cmd.data.name === 'rules'
       );
       if (owner) await owner.handleModalSubmit(interaction);
+      return;
+    }
+
+    // The "Open Ticket" / "Close Ticket" buttons
+    if (interaction.isButton()) {
+      if (interaction.customId === OPEN_BUTTON_ID) {
+        await openTicket(interaction);
+      } else if (interaction.customId === CLOSE_BUTTON_ID) {
+        await closeTicket(interaction);
+      }
     }
   } catch (error) {
     console.error(`Error handling interaction (${interaction.type}):`, error);
