@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType } = re
 const config = require('./config');
 const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = require('./utils/tickets');
 const { handleChoice: handleRpsChoice } = require('./utils/rps');
+const { startVerification, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
@@ -106,6 +107,11 @@ client.on('interactionCreate', async (interaction) => {
     // A text box submitted from a command (currently just /rules set). Routed to whichever
     // command file's customId prefix matches, so more commands can add their own modals later.
     if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith(`${VERIFY_MODAL_PREFIX}:`)) {
+        await submitVerification(interaction);
+        return;
+      }
+
       const [prefix] = interaction.customId.split(':');
       const owner = [...client.commands.values()].find(
         (cmd) => cmd.handleModalSubmit && interaction.customId.startsWith(`${prefix}:`) && cmd.data.name === 'rules'
@@ -122,6 +128,8 @@ client.on('interactionCreate', async (interaction) => {
         await closeTicket(interaction);
       } else if (interaction.customId.startsWith('rps:')) {
         await handleRpsChoice(interaction);
+      } else if (interaction.customId === VERIFY_BUTTON_ID) {
+        await startVerification(interaction);
       }
     }
   } catch (error) {
@@ -161,5 +169,9 @@ async function announceShutdown(signal) {
 
 process.on('SIGTERM', () => announceShutdown('SIGTERM'));
 process.on('SIGINT', () => announceShutdown('SIGINT'));
+
+client.on('guildMemberAdd', (member) => {
+  applyUnverifiedRole(member).catch((err) => console.error('[captcha] guildMemberAdd handler failed:', err));
+});
 
 client.login(config.token);

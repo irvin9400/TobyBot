@@ -32,6 +32,14 @@ module.exports = {
   // Optional: put ticket channels under this category instead of loose in the channel list.
   ticketCategoryId: process.env.TICKET_CATEGORY_ID || null,
 
+  // CAPTCHA verification for new members.
+  // verifiedRoleId is required for /verify-setup to work. unverifiedRoleId is optional — set it if
+  // you want new members auto-assigned a restricted role the moment they join (and your channels
+  // set up so that role can only see a #verify channel). Leave it blank if you're using verification
+  // as an "unlocks extra access" model instead of a full lockdown.
+  verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
+  unverifiedRoleId: process.env.UNVERIFIED_ROLE_ID || null,
+
   // Hosting platforms like Railway assign their own port via PORT and
   // expect the app to listen on it. WEBHOOK_PORT is used as a fallback
   // for local development.
