@@ -6,6 +6,7 @@ const {
   ChannelType,
   PermissionFlagsBits,
   MessageFlags,
+  AttachmentBuilder,
 } = require('discord.js');
 const config = require('../config');
 const { getOpenTicketChannelId, setTicket, removeTicketByChannel } = require('./ticketStore');
@@ -25,6 +26,28 @@ function buildPanelMessage() {
   );
 
   return { embeds: [embed], components: [row] };
+}
+
+// Fetches every message in a channel, oldest first isn't guaranteed here (Discord returns newest
+// first per page) — paginate backwards with `before` until there's nothing left, capped so an
+// unusually long-lived ticket channel can't make this loop forever.
+const MAX_TRANSCRIPT_MESSAGES = 2000;
+
+async function fetchAllMessages(channel) {
+  const all = [];
+  let beforeId = undefined;
+
+  while (all.length < MAX_TRANSCRIPT_MESSAGES) {
+    const batch = await channel.messages.fetch({ limit: 100, before: beforeId });
+    if (batch.size === 0) break;
+
+    all.push(...batch.values());
+    beforeId = batch.last().id;
+
+    if (batch.size < 100) break; // that was the last page
+  }
+
+  return all;
 }
 
 async function openTicket(interaction) {
@@ -86,25 +109,35 @@ async function closeTicket(interaction) {
 
   await interaction.reply(`This ticket is being closed by ${interaction.user}. Closing in 5 seconds...`);
 
-  // A simple text transcript, if a log channel is configured
+  // A full text transcript, posted as a downloadable file if a log channel is configured
   if (config.ticketLogChannelId) {
     try {
       const logChannel = await guild.channels.fetch(config.ticketLogChannelId);
-      const messages = await channel.messages.fetch({ limit: 100 });
-      const transcript = [...messages.values()]
+      const allMessages = await fetchAllMessages(channel);
+
+      const lines = allMessages
         .reverse()
-        .map((m) => `[${m.createdAt.toISOString()}] ${m.author.tag}: ${m.content}`)
-        .join('\n')
-        .slice(0, 3800); // stay under Discord's field/description limits
+        .map((m) => {
+          const attachments = [...m.attachments.values()].map((a) => a.url).join(' ');
+          const text = m.content || (attachments ? '' : '(no text)');
+          return `[${m.createdAt.toISOString()}] ${m.author.tag}: ${text}${attachments ? ` ${attachments}` : ''}`;
+        });
+      const transcriptText = lines.join('\n') || '(no messages)';
+
+      const file = new AttachmentBuilder(Buffer.from(transcriptText, 'utf-8'), {
+        name: `${channel.name}-transcript.txt`,
+      });
 
       const embed = new EmbedBuilder()
         .setTitle(`Ticket closed: #${channel.name}`)
-        .setDescription(transcript || '(no messages)')
         .setColor(0x99aab5)
-        .addFields({ name: 'Closed by', value: `${interaction.user.tag}`, inline: true })
+        .addFields(
+          { name: 'Closed by', value: `${interaction.user.tag}`, inline: true },
+          { name: 'Messages', value: String(allMessages.length), inline: true },
+        )
         .setTimestamp();
 
-      await logChannel.send({ embeds: [embed] });
+      await logChannel.send({ embeds: [embed], files: [file] });
     } catch (err) {
       console.error('[tickets] Failed to post transcript:', err);
     }
