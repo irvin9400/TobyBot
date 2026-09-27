@@ -21,6 +21,10 @@ module.exports = {
   // Where new/claimed/closed mod calls from Roblox are posted. Required for /mod-call to do anything.
   modCallChannelId: process.env.MOD_CALL_CHANNEL_ID || null,
 
+  // Where /update posts game update announcements by default.
+  // Leave blank to post in whatever channel you run /update in.
+  updatesChannelId: process.env.UPDATES_CHANNEL_ID || null,
+
   modRoleIds: (process.env.MOD_ROLE_IDS || '')
     .split(',')
     .map((id) => id.trim())
@@ -40,6 +44,18 @@ module.exports = {
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
   unverifiedRoleId: process.env.UNVERIFIED_ROLE_ID || null,
 
+  // Kick members who don't verify in time (see utils/verifyTimeout.js).
+  // VERIFY_KICK_HOURS: time limit in hours (default 24). Set to 0 to turn this off.
+  // VERIFY_REMINDER_HOURS: send a reminder DM this many hours before the deadline (default 6, 0 = no reminder).
+  // VERIFY_KICK_DRY_RUN=true: only log who WOULD be kicked, without kicking anyone. Use this to test first!
+  // VERIFY_KICK_INVITE: optional invite link included in the kick DM so people can rejoin.
+  // VERIFY_KICK_START: only needed if UNVERIFIED_ROLE_ID isn't set (a date like 2026-09-27).
+  verifyKickHours: process.env.VERIFY_KICK_HOURS !== undefined ? Number(process.env.VERIFY_KICK_HOURS) : 24,
+  verifyReminderHours: process.env.VERIFY_REMINDER_HOURS !== undefined ? Number(process.env.VERIFY_REMINDER_HOURS) : 6,
+  verifyKickDryRun: process.env.VERIFY_KICK_DRY_RUN === 'true',
+  verifyKickInvite: process.env.VERIFY_KICK_INVITE || null,
+  verifyKickStart: process.env.VERIFY_KICK_START || null,
+
   // Hosting platforms like Railway assign their own port via PORT and
   // expect the app to listen on it. WEBHOOK_PORT is used as a fallback
   // for local development.
@@ -48,5 +64,4 @@ module.exports = {
 
   // Posts here right after startup, and right before shutting down for a deploy/restart.
   statusChannelId: process.env.STATUS_CHANNEL_ID || null,
-    updatesChannelId: process.env.UPDATES_CHANNEL_ID || null,
 };

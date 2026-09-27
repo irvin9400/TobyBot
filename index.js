@@ -9,6 +9,7 @@ const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
 const { logAction } = require('./utils/logger');
+const { startVerifyTimeout } = require('./utils/verifyTimeout');
 
 const client = new Client({
   intents: [
@@ -46,6 +47,9 @@ client.once('clientReady', () => {
 
   // Start the webhook server once the bot is ready so it can fetch channels.
   createWebhookServer(client);
+
+  // Kick members who don't verify within 24 hours of joining (see utils/verifyTimeout.js)
+  startVerifyTimeout(client);
 
   // Temp bans: every minute, lift any ban from /ban whose time is up. Checking on an interval
   // (rather than one setTimeout per ban) means this still works correctly even if the bot restarts
@@ -111,10 +115,16 @@ client.on('interactionCreate', async (interaction) => {
         await submitVerification(interaction);
         return;
       }
+
+      // The /update form (commands/update.js)
       if (interaction.customId.startsWith('update:')) {
-        await client.commands.get('update').handleModalSubmit(interaction);
+        const updateCommand = client.commands.get('update');
+        if (updateCommand?.handleModalSubmit) {
+          await updateCommand.handleModalSubmit(interaction);
+        }
         return;
       }
+
       const [prefix] = interaction.customId.split(':');
       const owner = [...client.commands.values()].find(
         (cmd) => cmd.handleModalSubmit && interaction.customId.startsWith(`${prefix}:`) && cmd.data.name === 'rules'
