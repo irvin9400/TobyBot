@@ -48,4 +48,5 @@ module.exports = {
 
   // Posts here right after startup, and right before shutting down for a deploy/restart.
   statusChannelId: process.env.STATUS_CHANNEL_ID || null,
+    updatesChannelId: process.env.UPDATES_CHANNEL_ID || null,
 };

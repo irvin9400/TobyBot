@@ -111,7 +111,10 @@ client.on('interactionCreate', async (interaction) => {
         await submitVerification(interaction);
         return;
       }
-
+      if (interaction.customId.startsWith('update:')) {
+        await client.commands.get('update').handleModalSubmit(interaction);
+        return;
+      }
       const [prefix] = interaction.customId.split(':');
       const owner = [...client.commands.values()].find(
         (cmd) => cmd.handleModalSubmit && interaction.customId.startsWith(`${prefix}:`) && cmd.data.name === 'rules'
