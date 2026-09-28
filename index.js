@@ -1,181 +1,322 @@
-const express = require('express');
-const rateLimit = require('express-rate-limit');
-const crypto = require('crypto');
-const config = require('../config');
-const { logAction } = require('../utils/logger');
-const { syncLevelRank } = require('./groupranks');
+const fs = require('fs');
+const path = require('path');
+const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType, PermissionFlagsBits } = require('discord.js');
+const config = require('./config');
+const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = require('./utils/tickets');
+const { handleChoice: handleRpsChoice } = require('./utils/rps');
+const { startVerification, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
+const { createWebhookServer } = require('./webhook/server');
+const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
+const { addCase } = require('./utils/caseStore');
+const { logAction } = require('./utils/logger');
 
-// Explicit deny-list: these are NEVER logged, no matter what the game sends. This is the one place
-// that decides that, so if Roblox ever sends "doors_set" (the entrance toggle) by mistake, or a
-// future action you don't want logged, add its name here rather than relying on the Roblox side.
-const EXCLUDED_ACTIONS = new Set([
-  'doors_set',
-]);
+// ---------------------------------------------------------------------------------------------
+// Verification timeout: kicks members who don't verify within VERIFY_KICK_HOURS (default 24)
+// of joining, with a reminder DM a few hours before. Settings are in config.js.
+// (Kept inside index.js so there's no separate file to upload.)
+// ---------------------------------------------------------------------------------------------
 
-// Actions that create a numbered case in the Roblox admin panel go to the "mod log" channel
-// (GAME_LOG_CHANNEL_ID). Everything else goes to the "action log" channel (GAME_ACTION_LOG_CHANNEL_ID,
-// or GAME_LOG_CHANNEL_ID too if you haven't set a second one).
-const CASE_ACTIONS = new Set(['ban', 'unban', 'kick', 'warn', 'jail', 'unjail']);
+const CHECK_EVERY_MS = 10 * 60 * 1000; // Every 10 minutes
+const HOUR_MS = 60 * 60 * 1000;
+const reminded = new Set(); // "guildId:userId" of members already sent a reminder this run
 
-// A plain "!==" comparison leaks tiny timing differences that could theoretically help someone
-// guess the secret one character at a time. This compares in constant time instead. Different
-// lengths never match (and can't be timed against each other), so this is safe even though
-// timingSafeEqual itself requires equal-length buffers.
-function secretsMatch(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isStaff(member) {
+  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+  return (config.modRoleIds || []).some((id) => member.roles.cache.has(id));
 }
 
-function createWebhookServer(client) {
-  const app = express();
-  app.use(express.json());
+function canBeKicked(member, startCutoff) {
+  if (member.user.bot || member.id === member.guild.ownerId) return false;
+  if (config.verifiedRoleId && member.roles.cache.has(config.verifiedRoleId)) return false;
+  if (isStaff(member)) return false;
+  if (config.unverifiedRoleId) return member.roles.cache.has(config.unverifiedRoleId);
+  return startCutoff !== null && member.joinedTimestamp >= startCutoff;
+}
 
-  // Limits how often each IP can hit these routes, so even a leaked WEBHOOK_SECRET can't be used to
-  // flood your log channels indefinitely. Roblox only ever needs to log actions as fast as your
-  // moderators can click buttons in-game, so this is generous enough to never get in the way.
-  const webhookLimiter = rateLimit({
-    windowMs: 60_000,
-    limit: 60,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many requests. Slow down.' },
-  });
-  app.use('/game-log', webhookLimiter);
-  app.use('/mod-call', webhookLimiter);
+async function kickUnverified(client, member, hours) {
+  const reason = `Didn't verify within ${hours} hours of joining`;
 
-  // Level ranks: every Roblox server sends these when players join and level up, so it gets a
-  // higher limit than the log routes.
-  const rankLimiter = rateLimit({
-    windowMs: 60_000,
-    limit: 300,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many requests. Slow down.' },
-  });
-  app.use('/group-rank', rankLimiter);
+  if (config.verifyKickDryRun) {
+    console.log(`[verify-timeout] (dry run) Would kick ${member.user.tag}: ${reason}`);
+    return;
+  }
+  if (!member.kickable) {
+    console.warn(`[verify-timeout] Can't kick ${member.user.tag}. Is my role above theirs, and do I have Kick Members?`);
+    return;
+  }
 
-  app.post('/game-log', async (req, res) => {
-    const auth = req.get('authorization') || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  // Let them know why, and how to come back (DMs can fail if they're closed, that's fine)
+  const rejoin = config.verifyKickInvite ? ` You're welcome to rejoin and verify anytime: ${config.verifyKickInvite}` : '';
+  await member
+    .send(`You were removed from **${member.guild.name}** because you didn't verify within ${hours} hours of joining.${rejoin}`)
+    .catch(() => {});
 
-    if (!token || !secretsMatch(token, config.webhookSecret)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  await member.kick(reason);
 
-    const { action, moderator, target, reason, extra, case: caseNumber, duration, evidence, placeId, server } = req.body || {};
-
-    if (!action || typeof action !== 'string') {
-      return res.status(400).json({ error: 'Missing "action" field' });
-    }
-
-    const normalizedAction = action.toLowerCase().trim();
-
-    if (!normalizedAction || EXCLUDED_ACTIONS.has(normalizedAction)) {
-      // Explicitly excluded (e.g. the entrance toggle), or empty.
-      return res.status(400).json({
-        error: `Action "${action}" is not logged by this bot.`,
-      });
-    }
-
-    if (!target) {
-      return res.status(400).json({ error: 'Missing "target" field' });
-    }
-
-    await logAction(client, {
-      source: 'game',
-      category: CASE_ACTIONS.has(normalizedAction) ? 'case' : 'action',
-      action: normalizedAction,
-      moderator: moderator || 'In-game system',
-      target,
-      reason,
-      extra,
-      caseNumber: typeof caseNumber === 'number' ? caseNumber : undefined,
-      duration: typeof duration === 'string' ? duration.slice(0, 60) : undefined,
-      evidence: typeof evidence === 'string' ? evidence.slice(0, 300) : undefined,
-      placeId: typeof placeId === 'number' ? placeId : undefined,
-      server: typeof server === 'string' ? server.slice(0, 60) : undefined,
-    });
-
-    return res.status(200).json({ ok: true });
+  const record = addCase(member.guild.id, {
+    userId: member.id,
+    userTag: member.user.tag,
+    moderatorTag: 'Automatic (not verified)',
+    action: 'kick',
+    reason,
   });
 
-  // A player pressed the in-game "Mod Call" button, or an admin claimed/closed one (from
-  // ModCallServer.server.lua). This posts straight to modCallChannelId — it's not a moderation
-  // "case" or "action" like /game-log, so it doesn't go through EXCLUDED_ACTIONS/CASE_ACTIONS at all.
-  app.post('/mod-call', async (req, res) => {
-    const auth = req.get('authorization') || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token || !secretsMatch(token, config.webhookSecret)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const { event, caller, target, message, moderator, resolution, placeId, jobId } = req.body || {};
-    if (!event || !['new', 'claimed', 'closed'].includes(event)) {
-      return res.status(400).json({ error: 'Missing or invalid "event" field (new/claimed/closed)' });
-    }
-    if (!caller) {
-      return res.status(400).json({ error: 'Missing "caller" field' });
-    }
-
-    if (!config.modCallChannelId) {
-      console.warn('[webhook] MOD_CALL_CHANNEL_ID is not set, skipping mod call log.');
-      return res.status(200).json({ ok: true }); // don't fail the game's request over a missing setting
-    }
-
-    const channel = await client.channels.fetch(config.modCallChannelId).catch(() => null);
-    if (!channel) {
-      console.warn(`[webhook] Could not fetch mod call channel ${config.modCallChannelId}`);
-      return res.status(200).json({ ok: true });
-    }
-
-    const { buildModCallEmbed } = require('../utils/logger');
-    const embed = buildModCallEmbed({
-      event,
-      caller: String(caller).slice(0, 100),
-      target: target ? String(target).slice(0, 100) : undefined,
-      message: message ? String(message).slice(0, 300) : undefined,
-      moderator: moderator ? String(moderator).slice(0, 100) : undefined,
-      resolution: resolution ? String(resolution).slice(0, 100) : undefined,
-      placeId,
-      jobId,
-    });
-
-    await channel.send({ embeds: [embed] }).catch((err) => console.error('[webhook] Failed to send mod call embed:', err));
-    return res.status(200).json({ ok: true });
+  await logAction(client, {
+    source: 'discord',
+    action: 'kick',
+    moderator: 'Automatic (not verified)',
+    target: member.user.tag,
+    reason,
+    caseNumber: record?.case,
   });
 
-  // The game reports a player's level; the bot gives them the matching level role in the community.
-  // Only ever moves people between Member and the level roles (see webhook/groupranks.js).
-  app.post('/group-rank', async (req, res) => {
-    const auth = req.get('authorization') || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token || !secretsMatch(token, config.webhookSecret)) {
-      return res.status(401).json({ error: 'Unauthorized' });
+  console.log(`[verify-timeout] Kicked ${member.user.tag}: ${reason}`);
+}
+
+async function remind(member, hoursLeft) {
+  await member
+    .send(`Reminder: you still need to verify in **${member.guild.name}**. If you don't verify within about ${hoursLeft} hours, you'll be removed from the server.`)
+    .catch(() => {});
+}
+
+async function checkGuild(client, guild, startCutoff) {
+  const hours = config.verifyKickHours;
+  const limitMs = hours * HOUR_MS;
+  const reminderHours = config.verifyReminderHours;
+  const now = Date.now();
+
+  const members = await guild.members.fetch();
+  for (const member of members.values()) {
+    if (!member.joinedTimestamp || !canBeKicked(member, startCutoff)) continue;
+
+    const timeInServer = now - member.joinedTimestamp;
+    const key = `${guild.id}:${member.id}`;
+
+    if (timeInServer >= limitMs) {
+      try {
+        await kickUnverified(client, member, hours);
+      } catch (err) {
+        console.error(`[verify-timeout] Failed to kick ${member.user.tag}:`, err);
+      }
+      reminded.delete(key);
+      await wait(1000); // Go easy on Discord's rate limits
+    } else if (reminderHours > 0 && timeInServer >= limitMs - reminderHours * HOUR_MS && !reminded.has(key)) {
+      reminded.add(key);
+      await remind(member, reminderHours);
+    }
+  }
+}
+
+function startVerifyTimeout(client) {
+  if (!config.verifyKickHours || config.verifyKickHours <= 0) {
+    console.log('[verify-timeout] Off (VERIFY_KICK_HOURS is 0).');
+    return;
+  }
+
+  const startCutoff = config.verifyKickStart ? Date.parse(config.verifyKickStart) : null;
+  if (!config.unverifiedRoleId && (startCutoff === null || Number.isNaN(startCutoff))) {
+    console.warn('[verify-timeout] Not starting: set UNVERIFIED_ROLE_ID, or VERIFY_KICK_START to a date like 2026-09-27.');
+    return;
+  }
+
+  console.log(
+    `[verify-timeout] Kicking members who don't verify within ${config.verifyKickHours}h` +
+      (config.verifyKickDryRun ? ' (DRY RUN: nobody will actually be kicked)' : '')
+  );
+
+  async function checkAll() {
+    for (const guild of client.guilds.cache.values()) {
+      if (config.guildId && guild.id !== config.guildId) continue;
+      try {
+        await checkGuild(client, guild, startCutoff);
+      } catch (err) {
+        console.error(`[verify-timeout] Check failed for ${guild.name}:`, err);
+      }
+    }
+  }
+
+  checkAll();
+  setInterval(checkAll, CHECK_EVERY_MS);
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration,
+  ],
+});
+
+client.commands = new Collection();
+
+const commandsPath = path.join(__dirname, 'commands');
+for (const file of fs.readdirSync(commandsPath).filter((f) => f.endsWith('.js'))) {
+  const command = require(path.join(commandsPath, file));
+  client.commands.set(command.data.name, command);
+}
+
+client.once('clientReady', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+
+  // The bot's status: the colored dot (online/idle/dnd/invisible) and the text under its name.
+  // ActivityType.Watching / Playing / Listening / Competing change the verb shown before the text
+  // (e.g. "Watching the school", "Playing Roblox"). See discord.js's ActivityType enum for the options.
+  client.user.setPresence({
+    status: 'online',
+    activities: [{ name: 'Watching for tickets', type: ActivityType.Watching }],
+  });
+
+  // Let everyone watching the status channel know the bot is back, after a deploy or a restart
+  if (config.statusChannelId) {
+    client.channels.fetch(config.statusChannelId)
+      .then((channel) => channel.send('✅ **Back online.**'))
+      .catch((err) => console.error('[status] Failed to send the online message:', err));
+  }
+
+  // Start the webhook server once the bot is ready so it can fetch channels.
+  createWebhookServer(client);
+
+  // Kick members who don't verify within 24 hours of joining (see utils/verifyTimeout.js)
+  startVerifyTimeout(client);
+
+  // Temp bans: every minute, lift any ban from /ban whose time is up. Checking on an interval
+  // (rather than one setTimeout per ban) means this still works correctly even if the bot restarts
+  // in between — nothing depends on a timer surviving a restart, just this file on disk.
+  const TEMP_BAN_CHECK_INTERVAL_MS = 60_000;
+
+  async function checkTempBans() {
+    const now = Date.now();
+    for (const { guildId, userId, expiresAt, reason } of getAllTempBans()) {
+      if (expiresAt > now) continue;
+
+      try {
+        const guild = await client.guilds.fetch(guildId);
+        const stillBanned = await guild.bans.fetch(userId).catch(() => null);
+
+        if (stillBanned) {
+          await guild.bans.remove(userId, 'Temporary ban expired');
+
+          const record = addCase(guildId, {
+            userId,
+            userTag: stillBanned.user.tag,
+            moderatorTag: 'Automatic (temp ban expired)',
+            action: 'unban',
+            reason: `Temporary ban expired (was: ${reason})`,
+          });
+
+          await logAction(client, {
+            source: 'discord',
+            action: 'unban',
+            moderator: 'Automatic (temp ban expired)',
+            target: stillBanned.user.tag,
+            reason: `Temporary ban expired (was: ${reason})`,
+            caseNumber: record.case,
+          });
+        }
+      } catch (err) {
+        console.error(`Temp ban check failed for user ${userId} in guild ${guildId}:`, err);
+      } finally {
+        // Whether it worked, failed, or they were already unbanned by hand — stop tracking it, so a
+        // persistent failure (e.g. the bot lost access to the guild) doesn't retry forever.
+        removeTempBan(guildId, userId);
+      }
+    }
+  }
+
+  checkTempBans();
+  setInterval(checkTempBans, TEMP_BAN_CHECK_INTERVAL_MS);
+});
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      const command = client.commands.get(interaction.commandName);
+      if (!command) return;
+      await command.execute(interaction);
+      return;
     }
 
-    const userId = Number(req.body?.userId);
-    const level = Number(req.body?.level);
-    if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(level) || level < 1 || level > 1000) {
-      return res.status(400).json({ error: 'Invalid "userId" or "level"' });
+    // A text box submitted from a command (currently just /rules set). Routed to whichever
+    // command file's customId prefix matches, so more commands can add their own modals later.
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith(`${VERIFY_MODAL_PREFIX}:`)) {
+        await submitVerification(interaction);
+        return;
+      }
+
+      // The /update form (commands/update.js)
+      if (interaction.customId.startsWith('update:')) {
+        const updateCommand = client.commands.get('update');
+        if (updateCommand?.handleModalSubmit) {
+          await updateCommand.handleModalSubmit(interaction);
+        }
+        return;
+      }
+
+      const [prefix] = interaction.customId.split(':');
+      const owner = [...client.commands.values()].find(
+        (cmd) => cmd.handleModalSubmit && interaction.customId.startsWith(`${prefix}:`) && cmd.data.name === 'rules'
+      );
+      if (owner) await owner.handleModalSubmit(interaction);
+      return;
     }
 
+    // The "Open Ticket" / "Close Ticket" buttons, and the Rock Paper Scissors move buttons
+    if (interaction.isButton()) {
+      if (interaction.customId === OPEN_BUTTON_ID) {
+        await openTicket(interaction);
+      } else if (interaction.customId === CLOSE_BUTTON_ID) {
+        await closeTicket(interaction);
+      } else if (interaction.customId.startsWith('rps:')) {
+        await handleRpsChoice(interaction);
+      } else if (interaction.customId === VERIFY_BUTTON_ID) {
+        await startVerification(interaction);
+      }
+    }
+  } catch (error) {
+    console.error(`Error handling interaction (${interaction.type}):`, error);
+    const errorReply = { content: 'Something went wrong running that.', flags: MessageFlags.Ephemeral };
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(errorReply).catch(() => {});
+    } else {
+      await interaction.reply(errorReply).catch(() => {});
+    }
+  }
+});
+
+// Railway (and most hosts) send SIGTERM to ask a process to stop cleanly before killing it outright
+// — for a deploy, that's the moment just before the new version replaces this one. Posting here,
+// then exiting, is what makes the "going down" message actually happen before the bot disconnects.
+let shuttingDown = false;
+
+async function announceShutdown(signal) {
+  if (shuttingDown) return; // don't double-post if a second signal arrives while we're already exiting
+  shuttingDown = true;
+
+  console.log(`Received ${signal}, shutting down...`);
+
+  if (config.statusChannelId) {
     try {
-      const result = await syncLevelRank(userId, level);
-      console.log(`[group-rank] ${userId} (level ${level}): ${result}`);
-      return res.status(200).json({ ok: true, result });
+      const channel = await client.channels.fetch(config.statusChannelId);
+      await channel.send('🔧 **Going down for an update.** Back shortly.');
     } catch (err) {
-      console.error(`[group-rank] Failed for ${userId} (level ${level}):`, err.message);
-      return res.status(500).json({ error: 'Ranking failed' });
+      console.error('[status] Failed to send the going-down message:', err);
     }
-  });
+  }
 
-  app.listen(config.webhookPort, () => {
-    console.log(`Webhook server listening on port ${config.webhookPort}`);
-  });
-
-  return app;
+  client.destroy();
+  process.exit(0);
 }
 
-module.exports = { createWebhookServer, EXCLUDED_ACTIONS };
+process.on('SIGTERM', () => announceShutdown('SIGTERM'));
+process.on('SIGINT', () => announceShutdown('SIGINT'));
+
+client.on('guildMemberAdd', (member) => {
+  applyUnverifiedRole(member).catch((err) => console.error('[captcha] guildMemberAdd handler failed:', err));
+});
+
+client.login(config.token);

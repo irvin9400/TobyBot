@@ -163,7 +163,7 @@ function createWebhookServer(client) {
 
     try {
       const result = await syncLevelRank(userId, level);
-      if (result.startsWith('ranked')) console.log(`[group-rank] ${userId} (level ${level}): ${result}`);
+      console.log(`[group-rank] ${userId} (level ${level}): ${result}`);
       return res.status(200).json({ ok: true, result });
     } catch (err) {
       console.error(`[group-rank] Failed for ${userId} (level ${level}):`, err.message);
