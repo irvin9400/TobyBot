@@ -35,16 +35,17 @@ function canBeKicked(member, startCutoff) {
   return startCutoff !== null && member.joinedTimestamp >= startCutoff;
 }
 
-async function kickUnverified(client, member, hours) {
+// Returns 'kicked', 'preview' (would have kicked), or 'failed'
+async function kickUnverified(client, member, hours, preview) {
   const reason = `Didn't verify within ${hours} hours of joining`;
 
-  if (config.verifyKickDryRun) {
+  if (preview || config.verifyKickDryRun) {
     console.log(`[verify-timeout] (dry run) Would kick ${member.user.tag}: ${reason}`);
-    return;
+    return 'preview';
   }
   if (!member.kickable) {
     console.warn(`[verify-timeout] Can't kick ${member.user.tag}. Is my role above theirs, and do I have Kick Members?`);
-    return;
+    return 'failed';
   }
 
   // Let them know why, and how to come back (DMs can fail if they're closed, that's fine)
@@ -73,6 +74,7 @@ async function kickUnverified(client, member, hours) {
   });
 
   console.log(`[verify-timeout] Kicked ${member.user.tag}: ${reason}`);
+  return 'kicked';
 }
 
 async function remind(member, hoursLeft) {
@@ -81,7 +83,7 @@ async function remind(member, hoursLeft) {
     .catch(() => {});
 }
 
-async function checkGuild(client, guild, startCutoff) {
+async function checkGuild(client, guild, startCutoff, options = {}, summary = { kicked: [], preview: [], failed: [] }) {
   const hours = config.verifyKickHours;
   const limitMs = hours * HOUR_MS;
   const reminderHours = config.verifyReminderHours;
@@ -96,17 +98,20 @@ async function checkGuild(client, guild, startCutoff) {
 
     if (timeInServer >= limitMs) {
       try {
-        await kickUnverified(client, member, hours);
+        const result = await kickUnverified(client, member, hours, options.preview);
+        summary[result]?.push(member.user.tag);
       } catch (err) {
+        summary.failed.push(member.user.tag);
         console.error(`[verify-timeout] Failed to kick ${member.user.tag}:`, err);
       }
       reminded.delete(key);
       await wait(1000); // Go easy on Discord's rate limits
-    } else if (reminderHours > 0 && timeInServer >= limitMs - reminderHours * HOUR_MS && !reminded.has(key)) {
+    } else if (!options.preview && reminderHours > 0 && timeInServer >= limitMs - reminderHours * HOUR_MS && !reminded.has(key)) {
       reminded.add(key);
       await remind(member, reminderHours);
     }
   }
+  return summary;
 }
 
 function startVerifyTimeout(client) {
@@ -126,16 +131,23 @@ function startVerifyTimeout(client) {
       (config.verifyKickDryRun ? ' (DRY RUN: nobody will actually be kicked)' : '')
   );
 
-  async function checkAll() {
+  async function checkAll(options = {}) {
+    const summary = { kicked: [], preview: [], failed: [] };
     for (const guild of client.guilds.cache.values()) {
       if (config.guildId && guild.id !== config.guildId) continue;
       try {
-        await checkGuild(client, guild, startCutoff);
+        await checkGuild(client, guild, startCutoff, options, summary);
       } catch (err) {
         console.error(`[verify-timeout] Check failed for ${guild.name}:`, err);
       }
     }
+    return summary;
   }
+
+  // Run the check on demand (e.g. from /eval):
+  //   await client.runVerifyCheck()                    -> kicks anyone past the deadline now
+  //   await client.runVerifyCheck({ preview: true })   -> only lists who WOULD be kicked
+  client.runVerifyCheck = checkAll;
 
   checkAll();
   setInterval(checkAll, CHECK_EVERY_MS);
