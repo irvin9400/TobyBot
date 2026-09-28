@@ -30,6 +30,9 @@ function secretsMatch(a, b) {
 
 function createWebhookServer(client) {
   const app = express();
+  // Railway sits in front of the bot as a proxy. This tells Express to trust it, so the rate
+  // limiters see each caller's real address (fixes the ERR_ERL_UNEXPECTED_X_FORWARDED_FOR error).
+  app.set('trust proxy', 1);
   app.use(express.json());
 
   // Limits how often each IP can hit these routes, so even a leaked WEBHOOK_SECRET can't be used to
