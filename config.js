@@ -62,6 +62,11 @@ module.exports = {
   webhookPort: parseInt(process.env.PORT, 10) || parseInt(process.env.WEBHOOK_PORT, 10) || 3000,
   webhookSecret: requireEnv('WEBHOOK_SECRET'),
 
+  // Level roles in your Roblox community (see webhook/groupranks.js).
+  // ROBLOX_OPEN_CLOUD_KEY: an Open Cloud API key with read + write access to your community's members.
+  robloxGroupId: process.env.ROBLOX_GROUP_ID || null,
+  robloxOpenCloudKey: process.env.ROBLOX_OPEN_CLOUD_KEY || null,
+
   // Posts here right after startup, and right before shutting down for a deploy/restart.
   statusChannelId: process.env.STATUS_CHANNEL_ID || null,
 };

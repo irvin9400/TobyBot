@@ -3,6 +3,7 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const config = require('../config');
 const { logAction } = require('../utils/logger');
+const { syncLevelRank } = require('./groupranks');
 
 // Explicit deny-list: these are NEVER logged, no matter what the game sends. This is the one place
 // that decides that, so if Roblox ever sends "doors_set" (the entrance toggle) by mistake, or a
@@ -43,6 +44,17 @@ function createWebhookServer(client) {
   });
   app.use('/game-log', webhookLimiter);
   app.use('/mod-call', webhookLimiter);
+
+  // Level ranks: every Roblox server sends these when players join and level up, so it gets a
+  // higher limit than the log routes.
+  const rankLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Slow down.' },
+  });
+  app.use('/group-rank', rankLimiter);
 
   app.post('/game-log', async (req, res) => {
     const auth = req.get('authorization') || '';
@@ -132,6 +144,31 @@ function createWebhookServer(client) {
 
     await channel.send({ embeds: [embed] }).catch((err) => console.error('[webhook] Failed to send mod call embed:', err));
     return res.status(200).json({ ok: true });
+  });
+
+  // The game reports a player's level; the bot gives them the matching level role in the community.
+  // Only ever moves people between Member and the level roles (see webhook/groupranks.js).
+  app.post('/group-rank', async (req, res) => {
+    const auth = req.get('authorization') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (!token || !secretsMatch(token, config.webhookSecret)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = Number(req.body?.userId);
+    const level = Number(req.body?.level);
+    if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(level) || level < 1 || level > 1000) {
+      return res.status(400).json({ error: 'Invalid "userId" or "level"' });
+    }
+
+    try {
+      const result = await syncLevelRank(userId, level);
+      if (result.startsWith('ranked')) console.log(`[group-rank] ${userId} (level ${level}): ${result}`);
+      return res.status(200).json({ ok: true, result });
+    } catch (err) {
+      console.error(`[group-rank] Failed for ${userId} (level ${level}):`, err.message);
+      return res.status(500).json({ error: 'Ranking failed' });
+    }
   });
 
   app.listen(config.webhookPort, () => {
