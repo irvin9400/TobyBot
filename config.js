@@ -67,6 +67,10 @@ module.exports = {
   robloxGroupId: process.env.ROBLOX_GROUP_ID || null,
   robloxOpenCloudKey: process.env.ROBLOX_OPEN_CLOUD_KEY || null,
 
+  // Ban appeals (see webhook/appeals.js)
+  appealsChannelId: process.env.APPEALS_CHANNEL_ID || null,
+  robloxMainUniverseId: process.env.ROBLOX_MAIN_UNIVERSE_ID || null,
+
   // Posts here right after startup, and right before shutting down for a deploy/restart.
   statusChannelId: process.env.STATUS_CHANNEL_ID || null,
 };
