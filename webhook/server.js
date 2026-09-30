@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const { logAction } = require('../utils/logger');
 const { syncLevelRank } = require('./groupranks');
+const { registerAppealRoutes } = require('./appeals');
 
 // Explicit deny-list: these are NEVER logged, no matter what the game sends. This is the one place
 // that decides that, so if Roblox ever sends "doors_set" (the entrance toggle) by mistake, or a
@@ -58,6 +59,14 @@ function createWebhookServer(client) {
     message: { error: 'Too many requests. Slow down.' },
   });
   app.use('/group-rank', rankLimiter);
+  app.use('/appeal', webhookLimiter);
+
+  // Ban appeals from the separate appeals game (see webhook/appeals.js)
+  registerAppealRoutes(app, client, (req) => {
+    const auth = req.get('authorization') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    return Boolean(token) && secretsMatch(token, config.webhookSecret);
+  });
 
   app.post('/game-log', async (req, res) => {
     const auth = req.get('authorization') || '';
