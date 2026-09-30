@@ -8,6 +8,7 @@ const { startVerification, submitVerification, applyUnverifiedRole, START_BUTTON
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
+const { handleAppealButton, handleAppealModal } = require('./webhook/appeals');
 const { logAction } = require('./utils/logger');
 
 // ---------------------------------------------------------------------------------------------
@@ -260,6 +261,12 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      // Denying a ban appeal (webhook/appeals.js)
+      if (interaction.customId.startsWith('appealdeny:')) {
+        await handleAppealModal(interaction);
+        return;
+      }
+
       // The /update form (commands/update.js)
       if (interaction.customId.startsWith('update:')) {
         const updateCommand = client.commands.get('update');
@@ -287,6 +294,8 @@ client.on('interactionCreate', async (interaction) => {
         await handleRpsChoice(interaction);
       } else if (interaction.customId === VERIFY_BUTTON_ID) {
         await startVerification(interaction);
+      } else if (interaction.customId.startsWith('appeal:')) {
+        await handleAppealButton(interaction);
       }
     }
   } catch (error) {
