@@ -253,12 +253,15 @@ async function handleAppealButton(interaction) {
   saveAll(all);
 
   await interaction.editReply({ embeds: [buildEmbed(appeal)], components: [] });
+  // Logged as a game unban (it unbans them in Free Admin), in the game log with the other game cases
   await logAction(interaction.client, {
-    source: 'discord',
+    source: 'game',
+    category: 'case',
     action: 'unban',
-    moderator: interaction.user.tag,
-    target: appeal.username,
+    moderator: interaction.user.username,
+    target: `[${appeal.username}](https://www.roblox.com/users/${appeal.userId}/profile)`,
     reason: 'Ban appeal accepted',
+    extra: { Game: 'Free Admin', Via: 'Ban appeal (Discord)' },
   }).catch(() => {});
 }
 
