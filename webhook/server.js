@@ -1,6 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
+const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const { logAction } = require('../utils/logger');
 const { syncLevelRank } = require('./groupranks');
@@ -17,6 +18,21 @@ const EXCLUDED_ACTIONS = new Set([
 // (GAME_LOG_CHANNEL_ID). Everything else goes to the "action log" channel (GAME_ACTION_LOG_CHANNEL_ID,
 // or GAME_LOG_CHANNEL_ID too if you haven't set a second one).
 const CASE_ACTIONS = new Set(['ban', 'unban', 'kick', 'warn', 'jail', 'unjail']);
+
+// Booking requests from Event Central (the /booking-request route). The game says which channel
+// to post in, but only channels listed here are allowed, so a leaked WEBHOOK_SECRET can't be used
+// to post anywhere else. To move the requests to another channel, change the ID here AND
+// BOOKING_CHANNEL_ID at the top of BookingSystem in the Roblox game.
+const BOOKING_CHANNEL_IDS = new Set([
+  '1556097176944377886',
+]);
+
+// How each kind of booking message looks
+const BOOKING_LOOKS = {
+  request: { title: 'New booking request', color: 0xffcd3c },
+  approved: { title: 'Booking approved', color: 0x50c873 },
+  denied: { title: 'Booking declined', color: 0xe44848 },
+};
 
 // A plain "!==" comparison leaks tiny timing differences that could theoretically help someone
 // guess the secret one character at a time. This compares in constant time instead. Different
@@ -48,6 +64,7 @@ function createWebhookServer(client) {
   });
   app.use('/game-log', webhookLimiter);
   app.use('/mod-call', webhookLimiter);
+  app.use('/booking-request', webhookLimiter);
 
   // Level ranks: every Roblox server sends these when players join and level up, so it gets a
   // higher limit than the log routes.
@@ -155,6 +172,73 @@ function createWebhookServer(client) {
     });
 
     await channel.send({ embeds: [embed] }).catch((err) => console.error('[webhook] Failed to send mod call embed:', err));
+    return res.status(200).json({ ok: true });
+  });
+
+  // A player asked to book an event at a kiosk in Event Central, or staff approved/declined that
+  // request (from BookingSystem in the Roblox game). This posts an embed in the booking requests
+  // channel. The channel the game names must be in BOOKING_CHANNEL_IDS at the top of this file.
+  app.post('/booking-request', async (req, res) => {
+    const auth = req.get('authorization') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (!token || !secretsMatch(token, config.webhookSecret)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const b = req.body || {};
+    const look = BOOKING_LOOKS[b.type];
+    if (!look) {
+      return res.status(400).json({ error: 'Missing or invalid "type" field (request/approved/denied)' });
+    }
+    const channelId = String(b.channelId || '');
+    if (!BOOKING_CHANNEL_IDS.has(channelId)) {
+      return res.status(400).json({ error: 'That channel is not a booking requests channel' });
+    }
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      console.warn(`[webhook] Could not fetch booking requests channel ${channelId}`);
+      return res.status(200).json({ ok: true }); // don't fail the game's request over a channel problem
+    }
+
+    // A Roblox name as a link to the profile, when the game also sent the UserId
+    const profile = (name, id) => {
+      if (!name) return 'Unknown';
+      const safeName = String(name).slice(0, 60);
+      return Number.isInteger(id) && id > 0 ? `[${safeName}](https://www.roblox.com/users/${id}/profile)` : safeName;
+    };
+
+    // <t:...> timestamps show in each reader's own time zone
+    const starts = Number(b.startsAt);
+    const ends = Number(b.endsAt);
+    const when = Number.isFinite(starts) && starts > 0
+      ? `<t:${Math.floor(starts)}:F>` + (Number.isFinite(ends) && ends > 0 ? ` to <t:${Math.floor(ends)}:t>` : '')
+      : 'Not set';
+
+    const embed = new EmbedBuilder()
+      .setTitle(look.title)
+      .setColor(look.color)
+      .addFields(
+        { name: 'Event', value: String(b.event || 'Unnamed').slice(0, 200), inline: true },
+        { name: 'Group', value: String(b.group || 'Unknown').slice(0, 200), inline: true },
+        { name: 'Room', value: String(b.room || 'Stage').slice(0, 60), inline: true },
+        { name: 'When', value: when },
+        { name: 'Host', value: profile(b.host, b.hostId), inline: true },
+        { name: 'Requested by', value: profile(b.requestedBy, b.requestedById), inline: true },
+      )
+      .setTimestamp();
+
+    if (b.type === 'request') {
+      const hours = Number.isInteger(b.reviewHours) && b.reviewHours > 0 ? b.reviewHours : 24;
+      embed.setDescription(`Review this within **${hours} hours** on a staff computer in ${String(b.game || 'the game').slice(0, 60)} (Requests page).`);
+    } else if (b.reviewedBy) {
+      embed.addFields({ name: 'Reviewed by', value: String(b.reviewedBy).slice(0, 60), inline: true });
+    }
+    if (b.bookingId) {
+      embed.setFooter({ text: `Booking ${String(b.bookingId).slice(0, 80)}` });
+    }
+
+    await channel.send({ embeds: [embed] }).catch((err) => console.error('[webhook] Failed to send booking request embed:', err));
     return res.status(200).json({ ok: true });
   });
 
