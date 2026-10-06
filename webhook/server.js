@@ -29,6 +29,7 @@ const BOOKING_CHANNEL_IDS = new Set([
 
 // How each kind of booking message looks
 const BOOKING_LOOKS = {
+  booked: { title: 'New booking', color: 0x50c873 }, // confirmed straight away, no review needed
   request: { title: 'New booking request', color: 0xffcd3c },
   approved: { title: 'Booking approved', color: 0x50c873 },
   denied: { title: 'Booking declined', color: 0xe44848 },
@@ -188,7 +189,7 @@ function createWebhookServer(client) {
     const b = req.body || {};
     const look = BOOKING_LOOKS[b.type];
     if (!look) {
-      return res.status(400).json({ error: 'Missing or invalid "type" field (request/approved/denied)' });
+      return res.status(400).json({ error: 'Missing or invalid "type" field (booked/request/approved/denied)' });
     }
     const channelId = String(b.channelId || '');
     if (!BOOKING_CHANNEL_IDS.has(channelId)) {
@@ -224,11 +225,13 @@ function createWebhookServer(client) {
         { name: 'Room', value: String(b.room || 'Stage').slice(0, 60), inline: true },
         { name: 'When', value: when },
         { name: 'Host', value: profile(b.host, b.hostId), inline: true },
-        { name: 'Requested by', value: profile(b.requestedBy, b.requestedById), inline: true },
+        { name: b.type === 'booked' ? 'Booked by' : 'Requested by', value: profile(b.requestedBy, b.requestedById), inline: true },
       )
       .setTimestamp();
 
-    if (b.type === 'request') {
+    if (b.type === 'booked') {
+      embed.setDescription('This event is confirmed. No review is needed. Game Staff can join it at any time.');
+    } else if (b.type === 'request') {
       const hours = Number.isInteger(b.reviewHours) && b.reviewHours > 0 ? b.reviewHours : 24;
       embed.setDescription(`Review this within **${hours} hours** on a staff computer in ${String(b.game || 'the game').slice(0, 60)} (Requests page).`);
     } else if (b.reviewedBy) {
