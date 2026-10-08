@@ -8,7 +8,7 @@ const {
   MessageFlags,
   AttachmentBuilder,
 } = require('discord.js');
-const config = require('../config');
+const settings = require('./guildSettings');
 const { getOpenTicketChannelId, setTicket, removeTicketByChannel, getTicketBan } = require('./ticketStore');
 
 const OPEN_BUTTON_ID = 'ticket-open';
@@ -76,8 +76,10 @@ async function openTicket(interaction) {
     });
   }
 
-  if (!config.ticketSupportRoleId) {
-    return interaction.reply({ content: "Tickets aren't set up yet — TICKET_SUPPORT_ROLE_ID is missing.", flags: MessageFlags.Ephemeral });
+  // Each server's own support role (the mod/support role from /setup)
+  const supportRoleId = settings.supportRoleId(guild);
+  if (!supportRoleId) {
+    return interaction.reply({ content: "Tickets aren't set up yet. An admin needs to run `/setup` and pick the mod/support role.", flags: MessageFlags.Ephemeral });
   }
 
   const existingId = getOpenTicketChannelId(guild.id, user.id);
@@ -93,11 +95,11 @@ async function openTicket(interaction) {
   const channel = await guild.channels.create({
     name: `ticket-${user.username}`.toLowerCase().slice(0, 90),
     type: ChannelType.GuildText,
-    parent: config.ticketCategoryId || undefined,
+    parent: settings.ticketCategoryId(guild) || undefined,
     permissionOverwrites: [
       { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
       { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-      { id: config.ticketSupportRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: supportRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     ],
   });
 
@@ -106,7 +108,7 @@ async function openTicket(interaction) {
 
   const embed = new EmbedBuilder()
     .setTitle('🎫 Ticket opened')
-    .setDescription(`Thanks for reaching out, ${user}! <@&${config.ticketSupportRoleId}> will be with you shortly.\n\nDescribe what you need help with below.`)
+    .setDescription(`Thanks for reaching out, ${user}! <@&${supportRoleId}> will be with you shortly.\n\nDescribe what you need help with below.`)
     .setColor(0x5865f2)
     .setTimestamp();
 
@@ -114,14 +116,15 @@ async function openTicket(interaction) {
     new ButtonBuilder().setCustomId(CLOSE_BUTTON_ID).setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger)
   );
 
-  await channel.send({ content: `${user} <@&${config.ticketSupportRoleId}>`, embeds: [embed], components: [closeRow] });
+  await channel.send({ content: `${user} <@&${supportRoleId}>`, embeds: [embed], components: [closeRow] });
   await interaction.editReply({ content: `Your ticket is ready: ${channel}` });
 }
 
 async function closeTicket(interaction) {
   const { guild, channel, member } = interaction;
 
-  const isSupport = config.ticketSupportRoleId && member.roles.cache.has(config.ticketSupportRoleId);
+  const supportRoleId = settings.supportRoleId(guild);
+  const isSupport = Boolean(supportRoleId) && member.roles.cache.has(supportRoleId);
   const openerId = removeTicketByChannel(guild.id, channel.id);
   const isOpener = openerId === interaction.user.id;
 
@@ -134,9 +137,10 @@ async function closeTicket(interaction) {
   await interaction.reply(`This ticket is being closed by ${interaction.user}. Closing in 5 seconds...`);
 
   // A full text transcript, posted as a downloadable file if a log channel is configured
-  if (config.ticketLogChannelId) {
+  const ticketLogChannelId = settings.ticketLogChannelId(guild);
+  if (ticketLogChannelId) {
     try {
-      const logChannel = await guild.channels.fetch(config.ticketLogChannelId);
+      const logChannel = await guild.channels.fetch(ticketLogChannelId);
       const allMessages = await fetchAllMessages(channel);
 
       const lines = allMessages

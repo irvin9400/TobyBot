@@ -1,11 +1,13 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
+const settings = require('./guildSettings');
 
 // Colors per action, purely cosmetic (an action not listed here just uses the default gray —
 // it doesn't need to be added here for it to be logged).
 const COLORS = {
   kick: 0xf5a623,
   ban: 0xe0245e,
+  softban: 0xe0245e,
   unban: 0x2ecc71,
   timeout: 0xf5a623,
   untimeout: 0x2ecc71,
@@ -72,15 +74,30 @@ function formatTitle(action, source) {
  *   admin panel: ban, unban, kick, warn, jail, unjail) or 'action' (doesn't: freeze, unfreeze).
  *   'case' goes to GAME_LOG_CHANNEL_ID, 'action' goes to GAME_ACTION_LOG_CHANNEL_ID if you set
  *   one, otherwise it falls back to GAME_LOG_CHANNEL_ID too.
+ * guildId (source 'discord' only): which server the action happened in, so the log goes to THAT
+ *   server's log channel (set with /setup). Commands don't need to pass it: it's picked up from
+ *   the interaction being handled. Background jobs (temp bans, the verify timeout, the honeypot)
+ *   pass it themselves.
  */
-async function logAction(client, { source, category, action, moderator, target, reason, extra, caseNumber, duration, evidence, placeId, server }) {
+async function logAction(client, { source, category, action, moderator, target, reason, extra, caseNumber, duration, evidence, placeId, server, guildId }) {
   let channelId;
   if (source === 'game') {
     channelId = category === 'action'
       ? (config.gameActionLogChannelId || config.gameLogChannelId)
       : config.gameLogChannelId;
   } else {
-    channelId = config.modLogChannelId;
+    const logGuildId = guildId || settings.currentGuildId();
+    const guild = logGuildId ? client.guilds.cache.get(logGuildId) : null;
+    if (guild) {
+      // This server's own log channel. Never another server's.
+      channelId = settings.modLogChannelId(guild);
+      if (!channelId) {
+        console.warn(`[logger] ${guild.name} has no log channel (run /setup there with log_channel), skipping log.`);
+        return;
+      }
+    } else {
+      channelId = config.modLogChannelId;
+    }
   }
   if (!channelId) {
     console.warn(`[logger] No log channel configured for source "${source}" (category "${category}"), skipping log.`);

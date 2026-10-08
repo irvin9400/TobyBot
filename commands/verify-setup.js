@@ -1,6 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { buildPanelMessage } = require('../utils/captcha');
-const config = require('../config');
+const settings = require('../utils/guildSettings');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -11,9 +11,9 @@ module.exports = {
       opt.setName('channel').setDescription('Channel to post the panel in (defaults to this one)').setRequired(false)),
 
   async execute(interaction) {
-    if (!config.verifiedRoleId) {
+    if (!settings.verifiedRoleId(interaction.guild)) {
       return interaction.reply({
-        content: 'Set VERIFIED_ROLE_ID (and optionally UNVERIFIED_ROLE_ID) in your environment variables first.',
+        content: "This server doesn't have a verified role yet. Run `/setup` first: it sets the role and posts the panel for you.",
         flags: MessageFlags.Ephemeral,
       });
     }

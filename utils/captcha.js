@@ -9,6 +9,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 const config = require('../config');
+const settings = require('./guildSettings');
 
 const START_BUTTON_ID = 'verify-start';
 const MODAL_PREFIX = 'verify-modal'; // the modal's customId, so handleSubmit knows what it's for
@@ -42,8 +43,28 @@ function buildPanelMessage() {
   return { embeds: [embed], components: [row] };
 }
 
+// The notice posted above the panel by /setup: read the prompt, and the time limit (if one is set)
+function buildNoticeMessage() {
+  const hours = config.verifyKickHours;
+  const lines = [
+    'After you click **Verify**, a prompt will show you a short code.',
+    '',
+    'Please **read the prompt carefully** and type the code **exactly as shown**. Rushing it is the most common reason verification fails.',
+  ];
+  if (hours && hours > 0) {
+    lines.push('', `**Failure to verify within ${hours} hours of joining may result in being kicked from the server.**`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle('⚠️ Read before you verify')
+    .setDescription(lines.join('\n'))
+    .setColor(0xffcd3c);
+
+  return { embeds: [embed] };
+}
+
 async function startVerification(interaction) {
-  if (!config.verifiedRoleId) {
+  if (!settings.verifiedRoleId(interaction.guild)) {
     return interaction.reply({ content: "Verification isn't set up yet — ask an admin to configure it.", flags: MessageFlags.Ephemeral });
   }
 
@@ -86,10 +107,20 @@ async function submitVerification(interaction) {
     return interaction.reply({ content: "Verified! (Couldn't update your roles automatically — ask an admin.)", flags: MessageFlags.Ephemeral });
   }
 
+  // Each server has its own roles (set with /setup)
+  const verifiedRoleId = settings.verifiedRoleId(interaction.guild);
+  const unverifiedRoleId = settings.unverifiedRoleId(interaction.guild);
+  if (!verifiedRoleId) {
+    return interaction.reply({
+      content: "Your code was correct, but this server's verified role is missing. Ask an admin to run `/setup` again.",
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
   try {
-    await member.roles.add(config.verifiedRoleId);
-    if (config.unverifiedRoleId && member.roles.cache.has(config.unverifiedRoleId)) {
-      await member.roles.remove(config.unverifiedRoleId);
+    await member.roles.add(verifiedRoleId);
+    if (unverifiedRoleId && member.roles.cache.has(unverifiedRoleId)) {
+      await member.roles.remove(unverifiedRoleId);
     }
     await interaction.reply({ content: "✅ You're verified! Welcome in.", flags: MessageFlags.Ephemeral });
   } catch (err) {
@@ -103,9 +134,10 @@ async function submitVerification(interaction) {
 
 // Called when someone joins, if you've set an unverified role to auto-assign
 async function applyUnverifiedRole(member) {
-  if (!config.unverifiedRoleId) return;
+  const unverifiedRoleId = settings.unverifiedRoleId(member.guild);
+  if (!unverifiedRoleId) return;
   try {
-    await member.roles.add(config.unverifiedRoleId);
+    await member.roles.add(unverifiedRoleId);
   } catch (err) {
     console.error('[captcha] Failed to assign the unverified role on join:', err);
   }
@@ -113,6 +145,7 @@ async function applyUnverifiedRole(member) {
 
 module.exports = {
   buildPanelMessage,
+  buildNoticeMessage,
   startVerification,
   submitVerification,
   applyUnverifiedRole,

@@ -10,6 +10,7 @@ const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
 const { handleAppealButton, handleAppealModal } = require('./webhook/appeals');
 const { logAction } = require('./utils/logger');
+const settings = require('./utils/guildSettings');
 
 // ---------------------------------------------------------------------------------------------
 // Verification timeout: kicks members who don't verify within VERIFY_KICK_HOURS (default 24)
@@ -23,16 +24,21 @@ const reminded = new Set(); // "guildId:userId" of members already sent a remind
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Every server has its own roles (set with /setup; your original server can keep using the
+// environment variables). See utils/guildSettings.js.
 function isStaff(member) {
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  return (config.modRoleIds || []).some((id) => member.roles.cache.has(id));
+  return settings.modRoleIds(member.guild).some((id) => member.roles.cache.has(id));
 }
 
 function canBeKicked(member, startCutoff) {
   if (member.user.bot || member.id === member.guild.ownerId) return false;
-  if (config.verifiedRoleId && member.roles.cache.has(config.verifiedRoleId)) return false;
+  const verifiedRoleId = settings.verifiedRoleId(member.guild);
+  if (!verifiedRoleId) return false; // Verification isn't set up in this server: never kick anyone
+  if (member.roles.cache.has(verifiedRoleId)) return false;
   if (isStaff(member)) return false;
-  if (config.unverifiedRoleId) return member.roles.cache.has(config.unverifiedRoleId);
+  const unverifiedRoleId = settings.unverifiedRoleId(member.guild);
+  if (unverifiedRoleId) return member.roles.cache.has(unverifiedRoleId);
   return startCutoff !== null && member.joinedTimestamp >= startCutoff;
 }
 
@@ -67,6 +73,7 @@ async function kickUnverified(client, member, hours, preview) {
 
   await logAction(client, {
     source: 'discord',
+    guildId: member.guild.id,
     action: 'kick',
     moderator: 'Automatic (not verified)',
     target: member.user.tag,
@@ -121,11 +128,11 @@ function startVerifyTimeout(client) {
     return;
   }
 
-  const startCutoff = config.verifyKickStart ? Date.parse(config.verifyKickStart) : null;
-  if (!config.unverifiedRoleId && (startCutoff === null || Number.isNaN(startCutoff))) {
-    console.warn('[verify-timeout] Not starting: set UNVERIFIED_ROLE_ID, or VERIFY_KICK_START to a date like 2026-09-27.');
-    return;
-  }
+  // For servers without an unverified role, only people who joined after a cutoff can be kicked:
+  // the moment /setup was first run there, or VERIFY_KICK_START for a server that uses the
+  // environment variables instead.
+  const parsedStart = config.verifyKickStart ? Date.parse(config.verifyKickStart) : NaN;
+  const envCutoff = Number.isNaN(parsedStart) ? null : parsedStart;
 
   console.log(
     `[verify-timeout] Kicking members who don't verify within ${config.verifyKickHours}h` +
@@ -137,6 +144,9 @@ function startVerifyTimeout(client) {
     for (const guild of client.guilds.cache.values()) {
       if (config.guildId && guild.id !== config.guildId) continue;
       try {
+        // A server whose verified role comes from the environment variables keeps using VERIFY_KICK_START
+        const usesEnv = envCutoff !== null && Boolean(config.verifiedRoleId) && guild.roles.cache.has(config.verifiedRoleId);
+        const startCutoff = usesEnv ? envCutoff : settings.setupAt(guild.id);
         await checkGuild(client, guild, startCutoff, options, summary);
       } catch (err) {
         console.error(`[verify-timeout] Check failed for ${guild.name}:`, err);
@@ -156,13 +166,20 @@ function startVerifyTimeout(client) {
 
 // ---------------------------------------------------------------------------------------------
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildModeration,
-  ],
-});
+const intents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMembers,
+  GatewayIntentBits.GuildModeration,
+  GatewayIntentBits.GuildMessages, // Needed to notice someone posting in a honeypot channel
+];
+// Optional: lets honeypot logs show WHAT the spammer posted. Only set MESSAGE_CONTENT_INTENT=true
+// after turning on "Message Content Intent" for the bot in the Discord Developer Portal (Bot page).
+// With the variable set but the switch off, the bot can't log in at all.
+if (process.env.MESSAGE_CONTENT_INTENT === 'true') {
+  intents.push(GatewayIntentBits.MessageContent);
+}
+
+const client = new Client({ intents });
 
 client.commands = new Collection();
 
@@ -193,7 +210,7 @@ client.once('clientReady', () => {
   // Start the webhook server once the bot is ready so it can fetch channels.
   createWebhookServer(client);
 
-  // Kick members who don't verify within 24 hours of joining (see utils/verifyTimeout.js)
+  // Kick members who don't verify within 24 hours of joining (the code is at the top of this file)
   startVerifyTimeout(client);
 
   // Temp bans: every minute, lift any ban from /ban whose time is up. Checking on an interval
@@ -223,6 +240,7 @@ client.once('clientReady', () => {
 
           await logAction(client, {
             source: 'discord',
+            guildId,
             action: 'unban',
             moderator: 'Automatic (temp ban expired)',
             target: stillBanned.user.tag,
@@ -244,7 +262,13 @@ client.once('clientReady', () => {
   setInterval(checkTempBans, TEMP_BAN_CHECK_INTERVAL_MS);
 });
 
-client.on('interactionCreate', async (interaction) => {
+// Everything a command or button does runs "inside" its server, so logs go to that server's own
+// log channel (see guildContext in utils/guildSettings.js).
+client.on('interactionCreate', (interaction) =>
+  settings.guildContext.run({ guildId: interaction.guildId }, () => handleInteraction(interaction))
+);
+
+async function handleInteraction(interaction) {
   try {
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
@@ -306,6 +330,62 @@ client.on('interactionCreate', async (interaction) => {
     } else {
       await interaction.reply(errorReply).catch(() => {});
     }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Honeypot: a channel nobody should post in (picked with /setup). Spam bots and hacked accounts
+// post in every channel they can, so anyone who posts there is softbanned: banned and unbanned
+// straight away. That removes them and deletes their last hour of messages in every channel, but
+// a real person who was hacked can rejoin later. Staff and bots are ignored.
+// ---------------------------------------------------------------------------------------------
+
+const HONEYPOT_DELETE_SECONDS = 60 * 60;
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (!message.guild || message.author.bot || message.system) return;
+    const honeypotId = settings.honeypotChannelId(message.guild.id);
+    if (!honeypotId || message.channelId !== honeypotId) return;
+
+    const member = message.member || (await message.guild.members.fetch(message.author.id).catch(() => null));
+    if (member && (isStaff(member) || member.permissions.has(PermissionFlagsBits.ManageMessages))) return;
+
+    const reason = 'Honeypot: posted in the trap channel';
+    // Empty unless MESSAGE_CONTENT_INTENT is on (see the intents above)
+    const posted = message.content ? message.content.slice(0, 500) : null;
+    let failure = null;
+
+    try {
+      await message.guild.members.ban(message.author.id, { deleteMessageSeconds: HONEYPOT_DELETE_SECONDS, reason });
+      await message.guild.members.unban(message.author.id, 'Honeypot softban');
+    } catch (err) {
+      failure = err?.message || String(err);
+      console.error(`[honeypot] Couldn't softban ${message.author.tag} in ${message.guild.name}:`, err);
+    }
+
+    const record = failure
+      ? null
+      : addCase(message.guild.id, {
+          userId: message.author.id,
+          userTag: message.author.tag,
+          moderatorTag: 'Automatic (honeypot)',
+          action: 'softban',
+          reason,
+        });
+
+    await logAction(client, {
+      source: 'discord',
+      guildId: message.guild.id,
+      action: 'softban',
+      moderator: 'Automatic (honeypot)',
+      target: `${message.author.tag} (${message.author.id})`,
+      reason: failure ? `FAILED to softban: ${failure}. Check my role is above theirs and I have Ban Members.` : reason,
+      caseNumber: record?.case,
+      extra: posted ? { 'What they posted': posted } : undefined,
+    });
+  } catch (err) {
+    console.error('[honeypot] Handler failed:', err);
   }
 });
 
