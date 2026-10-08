@@ -1,11 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType, PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
 const config = require('./config');
 const tickets = require('./utils/tickets');
 const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = tickets;
 const { handleChoice: handleRpsChoice } = require('./utils/rps');
-const { startVerification, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
+const { startVerification, confirmAge, declineAge, AGE_CONFIRM_ID, AGE_DECLINE_ID, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
 const { addCase } = require('./utils/caseStore');
@@ -339,6 +339,10 @@ async function handleInteraction(interaction) {
         await handleRpsChoice(interaction);
       } else if (interaction.customId === VERIFY_BUTTON_ID) {
         await startVerification(interaction);
+      } else if (interaction.customId === AGE_CONFIRM_ID) {
+        await confirmAge(interaction);
+      } else if (interaction.customId === AGE_DECLINE_ID) {
+        await declineAge(interaction);
       } else if (interaction.customId.startsWith('appeal:')) {
         await handleAppealButton(interaction);
       }
@@ -436,6 +440,89 @@ async function announceShutdown(signal) {
 
 process.on('SIGTERM', () => announceShutdown('SIGTERM'));
 process.on('SIGINT', () => announceShutdown('SIGINT'));
+
+// ---------------------------------------------------------------------------------------------
+// Welcome message: when the bot is added to a server, it introduces itself and explains how to
+// set it up. Posted once, in the server's system channel if it can talk there, otherwise in the
+// first text channel it can.
+// ---------------------------------------------------------------------------------------------
+
+function buildWelcomeMessage(guild) {
+  const hours = config.verifyKickHours;
+  const embed = new EmbedBuilder()
+    .setTitle(`👋 Thanks for adding ${client.user.username}!`)
+    .setColor(0x5865f2)
+    .setDescription(
+      `I help run **${guild.name}**: member verification, moderation with case history, support tickets, and a trap channel for spam bots.\n\n` +
+        'Nothing is switched on yet. Someone with **Manage Server** needs to set me up first:'
+    )
+    .addFields(
+      {
+        name: '1. Put my role in the right place',
+        value: 'In **Server Settings > Roles**, drag my role above the roles I should give out (like your verified role) and above the members I should be able to moderate.',
+      },
+      {
+        name: '2. Run /setup',
+        value:
+          'Type `/setup` and fill in:\n' +
+          '- `verify_channel`: where the Verify button goes\n' +
+          '- `verified_role`: the role members get when they verify\n' +
+          '- `mod_role`: your mod/support team\n' +
+          '- `honeypot_channel` *(optional)*: a channel nobody should post in. Anyone who does is removed as a spam bot.\n' +
+          '- `log_channel` *(optional, recommended)*: where mod actions are recorded\n' +
+          '- `unverified_role` *(optional)*: a role new members hold until they verify\n' +
+          "I'll check everything, tell you if something needs fixing, then post the verification messages for you.",
+      },
+      {
+        name: '3. Add the extras you want',
+        value:
+          '- `/ticket-setup` posts the support ticket panel\n' +
+          '- `/rules` posts your server rules in a channel you pick\n' +
+          'Moderation commands such as `/warn`, `/kick`, `/ban`, `/timeout` and `/history` work for your mod role as soon as setup is done.',
+      },
+      {
+        name: 'Good to know',
+        value:
+          (hours > 0 ? `- After setup, new members who don't verify within **${hours} hours** are removed automatically.\n` : '') +
+          '- You can run `/setup` again at any time to change something.\n' +
+          "- If a command doesn't appear, give it a few minutes after adding me, then restart Discord.",
+      }
+    );
+  return { embeds: [embed] };
+}
+
+function canPostIn(channel, me) {
+  if (!channel || !channel.isTextBased() || channel.isThread() || channel.isVoiceBased()) return false;
+  const perms = channel.permissionsFor(me);
+  return Boolean(perms?.has(PermissionFlagsBits.ViewChannel) && perms.has(PermissionFlagsBits.SendMessages) && perms.has(PermissionFlagsBits.EmbedLinks));
+}
+
+client.on('guildCreate', async (guild) => {
+  try {
+    // Discord also fires this when a server comes back after an outage, so only greet a server
+    // the bot joined in the last few minutes, and only once.
+    if (settings.getStored(guild.id).welcomedAt) return;
+    const me = guild.members.me || (await guild.members.fetchMe());
+    if (!me.joinedTimestamp || Date.now() - me.joinedTimestamp > 5 * 60 * 1000) return;
+
+    let channel = canPostIn(guild.systemChannel, me) ? guild.systemChannel : null;
+    if (!channel) {
+      channel = [...guild.channels.cache.values()]
+        .filter((c) => c.type === ChannelType.GuildText && canPostIn(c, me))
+        .sort((a, b) => a.rawPosition - b.rawPosition)[0];
+    }
+    if (!channel) {
+      console.warn(`[welcome] Joined ${guild.name} but couldn't find a channel I can post in.`);
+      return;
+    }
+
+    await channel.send(buildWelcomeMessage(guild));
+    settings.update(guild.id, { welcomedAt: Date.now() });
+    console.log(`[welcome] Joined ${guild.name} (${guild.id}) and posted the setup guide in #${channel.name}.`);
+  } catch (err) {
+    console.error(`[welcome] Failed to greet ${guild.name}:`, err);
+  }
+});
 
 client.on('guildMemberAdd', (member) => {
   applyUnverifiedRole(member).catch((err) => console.error('[captcha] guildMemberAdd handler failed:', err));

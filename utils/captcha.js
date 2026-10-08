@@ -12,6 +12,10 @@ const config = require('../config');
 const settings = require('./guildSettings');
 
 const START_BUTTON_ID = 'verify-start';
+// Before the code, members confirm they meet Discord's minimum age. Nothing about their age is
+// stored: clicking "I confirm" just moves them on to the code.
+const AGE_CONFIRM_ID = 'verify-age-yes';
+const AGE_DECLINE_ID = 'verify-age-no';
 const MODAL_PREFIX = 'verify-modal'; // the modal's customId, so handleSubmit knows what it's for
 
 // Avoids characters that are easy to misread (no I, L, O, 0, 1)
@@ -33,7 +37,7 @@ function generateCode() {
 function buildPanelMessage() {
   const embed = new EmbedBuilder()
     .setTitle('✅ Verify to get access')
-    .setDescription("Click the button below. You'll be shown a short code to type back — this just confirms you're a real person, not a bot.")
+    .setDescription("Click the button below, confirm you're 13 or older, then type back the short code you're shown. This confirms you're a real person, not a bot.")
     .setColor(0x57f287);
 
   const row = new ActionRowBuilder().addComponents(
@@ -47,7 +51,7 @@ function buildPanelMessage() {
 function buildNoticeMessage() {
   const hours = config.verifyKickHours;
   const lines = [
-    'After you click **Verify**, a prompt will show you a short code.',
+    'After you click **Verify**, confirm that you are **13 or older**, then a prompt will show you a short code.',
     '',
     'Please **read the prompt carefully** and type the code **exactly as shown**. Rushing it is the most common reason verification fails.',
   ];
@@ -63,7 +67,44 @@ function buildNoticeMessage() {
   return { embeds: [embed] };
 }
 
+// Step 1 (the Verify button): confirm they're 13 or older
 async function startVerification(interaction) {
+  const verifiedRoleId = settings.verifiedRoleId(interaction.guild);
+  if (!verifiedRoleId) {
+    return interaction.reply({ content: "Verification isn't set up yet — ask an admin to configure it.", flags: MessageFlags.Ephemeral });
+  }
+  if (interaction.member?.roles?.cache?.has(verifiedRoleId)) {
+    return interaction.reply({ content: "You're already verified. Welcome back!", flags: MessageFlags.Ephemeral });
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle('Before you verify')
+    .setDescription(
+      "Discord requires everyone using it to be at least **13 years old** (older in some countries).\n\n" +
+        "Please confirm that you meet Discord's minimum age and that you'll follow Discord's Terms of Service and this server's rules."
+    )
+    .setColor(0xffcd3c);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(AGE_CONFIRM_ID).setLabel("I confirm I'm 13 or older").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(AGE_DECLINE_ID).setLabel("I'm under 13").setStyle(ButtonStyle.Secondary)
+  );
+  return interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+}
+
+// They said they're under 13: don't verify them, and don't record anything
+async function declineAge(interaction) {
+  const embed = new EmbedBuilder()
+    .setTitle("Sorry, you can't verify")
+    .setDescription(
+      "Discord's Terms of Service require users to be at least 13 years old, so we can't let you into this server.\n\n" +
+        "Nothing about your answer has been saved."
+    )
+    .setColor(0x99aab5);
+  return interaction.update({ embeds: [embed], components: [] });
+}
+
+// Step 2 ("I confirm" button): the same type-the-code box as before
+async function confirmAge(interaction) {
   if (!settings.verifiedRoleId(interaction.guild)) {
     return interaction.reply({ content: "Verification isn't set up yet — ask an admin to configure it.", flags: MessageFlags.Ephemeral });
   }
@@ -144,6 +185,10 @@ async function applyUnverifiedRole(member) {
 }
 
 module.exports = {
+  confirmAge,
+  declineAge,
+  AGE_CONFIRM_ID,
+  AGE_DECLINE_ID,
   buildPanelMessage,
   buildNoticeMessage,
   startVerification,
