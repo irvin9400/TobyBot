@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Collection, MessageFlags, ActivityType, PermissionFlagsBits } = require('discord.js');
 const config = require('./config');
-const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = require('./utils/tickets');
+const tickets = require('./utils/tickets');
+const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = tickets;
 const { handleChoice: handleRpsChoice } = require('./utils/rps');
 const { startVerification, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
 const { createWebhookServer } = require('./webhook/server');
@@ -279,7 +280,25 @@ async function handleInteraction(interaction) {
 
     // A text box submitted from a command (currently just /rules set). Routed to whichever
     // command file's customId prefix matches, so more commands can add their own modals later.
+    // The topic menu on the ticket panel (utils/tickets.js)
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === tickets.CATEGORY_SELECT_ID) {
+        await tickets.handleCategorySelect(interaction);
+      }
+      return;
+    }
+
     if (interaction.isModalSubmit()) {
+      // Ticket forms: the questions when opening one, and the reason when closing one
+      if (interaction.customId.startsWith(`${tickets.FORM_MODAL_PREFIX}:`)) {
+        await tickets.handleFormSubmit(interaction);
+        return;
+      }
+      if (interaction.customId === tickets.CLOSE_MODAL_ID) {
+        await tickets.submitClose(interaction);
+        return;
+      }
+
       if (interaction.customId.startsWith(`${VERIFY_MODAL_PREFIX}:`)) {
         await submitVerification(interaction);
         return;
@@ -314,6 +333,8 @@ async function handleInteraction(interaction) {
         await openTicket(interaction);
       } else if (interaction.customId === CLOSE_BUTTON_ID) {
         await closeTicket(interaction);
+      } else if (interaction.customId === tickets.CLAIM_BUTTON_ID) {
+        await tickets.claimTicket(interaction);
       } else if (interaction.customId.startsWith('rps:')) {
         await handleRpsChoice(interaction);
       } else if (interaction.customId === VERIFY_BUTTON_ID) {

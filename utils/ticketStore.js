@@ -26,7 +26,8 @@ function writeAll(data) {
 
 function getOpenTicketChannelId(guildId, userId) {
   const data = readAll();
-  return data[guildId]?.[userId] || null;
+  const value = data[guildId]?.[userId];
+  return typeof value === 'string' ? value : null;
 }
 
 function setTicket(guildId, userId, channelId) {
@@ -48,6 +49,47 @@ function removeTicketByChannel(guildId, channelId) {
     }
   }
   return null;
+}
+
+// Who opened the ticket in this channel (null if it isn't a ticket). Doesn't change anything.
+function getTicketOwner(guildId, channelId) {
+  const users = readAll()[guildId] || {};
+  for (const [userId, chanId] of Object.entries(users)) {
+    if (chanId === channelId) return userId;
+  }
+  return null;
+}
+
+// Each server counts its own tickets: #0001, #0002...
+function nextTicketNumber(guildId) {
+  const data = readAll();
+  data[guildId] = data[guildId] || {};
+  const number = (data[guildId].nextNumber || 1);
+  data[guildId].nextNumber = number + 1;
+  writeAll(data);
+  return number;
+}
+
+// Details about an open ticket, kept by channel: { number, category, openerId, openerTag, openedAt,
+// answers: [{ label, value }], claimedById, claimedByTag }
+function setTicketMeta(guildId, channelId, meta) {
+  const data = readAll();
+  data[guildId] = data[guildId] || {};
+  data[guildId].meta = data[guildId].meta || {};
+  data[guildId].meta[channelId] = meta;
+  writeAll(data);
+}
+
+function getTicketMeta(guildId, channelId) {
+  return readAll()[guildId]?.meta?.[channelId] || null;
+}
+
+function removeTicketMeta(guildId, channelId) {
+  const data = readAll();
+  if (data[guildId]?.meta?.[channelId]) {
+    delete data[guildId].meta[channelId];
+    writeAll(data);
+  }
 }
 
 // Bans a user from opening tickets (separate from a real Discord server ban).
@@ -78,6 +120,11 @@ module.exports = {
   getOpenTicketChannelId,
   setTicket,
   removeTicketByChannel,
+  getTicketOwner,
+  nextTicketNumber,
+  setTicketMeta,
+  getTicketMeta,
+  removeTicketMeta,
   banFromTickets,
   unbanFromTickets,
   getTicketBan,
