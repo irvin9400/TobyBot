@@ -5,6 +5,8 @@ const config = require('./config');
 const tickets = require('./utils/tickets');
 const { openTicket, closeTicket, OPEN_BUTTON_ID, CLOSE_BUTTON_ID } = tickets;
 const { handleChoice: handleRpsChoice } = require('./utils/rps');
+const { handleAgeAlertButton, AGE_APPROVE_PREFIX, AGE_KICK_PREFIX } = require('./utils/captcha');
+const { getAgeLock } = require('./utils/ageLockStore');
 const { startVerification, confirmAge, declineAge, AGE_CONFIRM_ID, AGE_DECLINE_ID, submitVerification, applyUnverifiedRole, START_BUTTON_ID: VERIFY_BUTTON_ID, MODAL_PREFIX: VERIFY_MODAL_PREFIX } = require('./utils/captcha');
 const { createWebhookServer } = require('./webhook/server');
 const { getAllTempBans, removeTempBan } = require('./utils/tempBanStore');
@@ -38,6 +40,8 @@ function canBeKicked(member, startCutoff) {
   if (!verifiedRoleId) return false; // Verification isn't set up in this server: never kick anyone
   if (member.roles.cache.has(verifiedRoleId)) return false;
   if (isStaff(member)) return false;
+  // Said they're under 13: staff decide what happens (approve or kick), not the timer
+  if (getAgeLock(member.guild.id, member.id)) return false;
   const unverifiedRoleId = settings.unverifiedRoleId(member.guild);
   if (unverifiedRoleId) return member.roles.cache.has(unverifiedRoleId);
   return startCutoff !== null && member.joinedTimestamp >= startCutoff;
@@ -343,6 +347,8 @@ async function handleInteraction(interaction) {
         await confirmAge(interaction);
       } else if (interaction.customId === AGE_DECLINE_ID) {
         await declineAge(interaction);
+      } else if (interaction.customId.startsWith(`${AGE_APPROVE_PREFIX}:`) || interaction.customId.startsWith(`${AGE_KICK_PREFIX}:`)) {
+        await handleAgeAlertButton(interaction);
       } else if (interaction.customId.startsWith('appeal:')) {
         await handleAppealButton(interaction);
       }

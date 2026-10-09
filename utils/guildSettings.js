@@ -94,6 +94,11 @@ function ticketCategoryId(guild) {
   return channelIn(guild, config.ticketCategoryId);
 }
 
+// Where "I'm under 13" alerts go: the channel picked in /setup, or the log channel if none was
+function ageAlertChannelId(guild) {
+  return channelIn(guild, getStored(guild.id).ageAlertChannelId) || modLogChannelId(guild);
+}
+
 function honeypotChannelId(guildId) {
   return getStored(guildId).honeypotChannelId || null;
 }
@@ -124,6 +129,7 @@ module.exports = {
   ticketLogChannelId,
   ticketCategoryId,
   honeypotChannelId,
+  ageAlertChannelId,
   setupAt,
   guildContext,
   currentGuildId,

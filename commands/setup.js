@@ -53,7 +53,9 @@ module.exports = {
     .addChannelOption((opt) =>
       opt.setName('log_channel').setDescription('Where mod actions and honeypot catches are logged').addChannelTypes(...TEXT_CHANNELS).setRequired(false))
     .addRoleOption((opt) =>
-      opt.setName('unverified_role').setDescription('Optional: role given to new members until they verify').setRequired(false)),
+      opt.setName('unverified_role').setDescription('Optional: role given to new members until they verify').setRequired(false))
+    .addChannelOption((opt) =>
+      opt.setName('age_alert_channel').setDescription('Where staff are alerted when someone says they are under 13 (default: log channel)').addChannelTypes(...TEXT_CHANNELS).setRequired(false)),
 
   async execute(interaction) {
     const { guild } = interaction;
@@ -68,6 +70,7 @@ module.exports = {
     const honeypotChannel = interaction.options.getChannel('honeypot_channel');
     const logChannel = interaction.options.getChannel('log_channel');
     const unverifiedRole = interaction.options.getRole('unverified_role');
+    const ageAlertChannel = interaction.options.getChannel('age_alert_channel');
 
     const me = guild.members.me || (await guild.members.fetchMe());
     const myTop = me.roles.highest;
@@ -108,6 +111,11 @@ module.exports = {
         problems.push("The honeypot needs the **Ban Members** permission, which I don't have.");
       }
     }
+    if (ageAlertChannel) {
+      if (ageAlertChannel.id === verifyChannel.id) problems.push("The age alert channel should be a staff-only channel, not the verification channel.");
+      const alertMissing = missingToPost(ageAlertChannel, me);
+      if (alertMissing) problems.push(`I can't post in ${ageAlertChannel}. I'm missing: ${alertMissing}.`);
+    }
     if (logChannel) {
       const logMissing = missingToPost(logChannel, me);
       if (logMissing) problems.push(`I can't post in ${logChannel}. I'm missing: ${logMissing}.`);
@@ -128,6 +136,7 @@ module.exports = {
       honeypotChannelId: honeypotChannel ? honeypotChannel.id : undefined, // left out = keep what was there
       logChannelId: logChannel ? logChannel.id : undefined,
       unverifiedRoleId: unverifiedRole ? unverifiedRole.id : undefined,
+      ageAlertChannelId: ageAlertChannel ? ageAlertChannel.id : undefined,
       setupAt: typeof before.setupAt === 'number' ? before.setupAt : Date.now(),
       setupBy: interaction.user.id,
     });
@@ -164,11 +173,15 @@ module.exports = {
       `**Mod/support role:** ${mention(saved.modRoleId, 'role')}`,
       `**Honeypot channel:** ${mention(saved.honeypotChannelId, 'channel')}`,
       `**Log channel:** ${mention(settings.modLogChannelId(guild), 'channel')}`,
+      `**Under-13 alerts:** ${mention(settings.ageAlertChannelId(guild), 'channel')}${saved.ageAlertChannelId ? '' : ' *(the log channel)*'}`,
     ];
     if (posted.length > 0) lines.push('', `Posted ${posted.join(', and ')}.`);
     if (failed.length > 0) lines.push('', `⚠️ I couldn't post ${failed.join(', or ')}. Check my permissions there and run \`/setup\` again.`);
 
     const notes = [];
+    if (!settings.ageAlertChannelId(guild)) {
+      notes.push("Nobody will be alerted when someone says they're under 13. Set `age_alert_channel` or `log_channel` to fix that.");
+    }
     if (!settings.modLogChannelId(guild)) {
       notes.push('No log channel is set, so mod actions and honeypot catches in this server are not logged anywhere. Run `/setup` again with `log_channel` to fix that.');
     }
