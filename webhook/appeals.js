@@ -1,16 +1,21 @@
 // webhook/appeals.js   (all lowercase, so Git and Railway agree on the name)
-// Ban appeals from the separate Roblox appeals game.
+// Ban appeals from the separate Roblox appeals game - for every game in APPEAL_GAMES
+// (Free Admin, Pine Hollow, ...). Each ban is appealed separately, once per ban.
 //
-//   POST /appeal/status  { userId }                  -> ban details + appeal status
-//   POST /appeal/submit  { userId, username, text }  -> posts the appeal in APPEALS_CHANNEL_ID
+//   POST /appeal/status  { userId }                         -> every active ban + its appeal status
+//   POST /appeal/submit  { userId, username, text, game }   -> posts the appeal in APPEALS_CHANNEL_ID
+//                        (game = the game's name from APPEAL_GAMES; can be left out if they're
+//                         only banned from one game)
 //
-// Staff press Accept (unbans them in the main game through Roblox Open Cloud) or Deny
+// Staff press Accept (unbans them in THAT game through Roblox Open Cloud) or Deny
 // (opens a box for an optional note to the player).
 //
 // Needs in Railway Variables:
 //   APPEALS_CHANNEL_ID=1552002486686978169
-//   ROBLOX_MAIN_UNIVERSE_ID=<your Free Admin game's Universe ID>
-//   ROBLOX_OPEN_CLOUD_KEY  (the same key as level ranks, with "user-restrictions" read + write added)
+//   APPEAL_GAMES=Free Admin:<Free Admin Universe ID>,Pine Hollow:<Pine Hollow Universe ID>
+//     (without APPEAL_GAMES, only ROBLOX_MAIN_UNIVERSE_ID = Free Admin is checked, like before)
+//   ROBLOX_OPEN_CLOUD_KEY  (the same key as level ranks, with "user-restrictions" read + write added
+//                           for EVERY game in APPEAL_GAMES)
 
 const fs = require('fs');
 const path = require('path');
@@ -54,12 +59,27 @@ function saveAll(all) {
 // Roblox Open Cloud: bans in the main game
 // ------------------------------------------------------------------
 
-function restrictionUrl(userId) {
-  return `${API}/universes/${config.robloxMainUniverseId}/user-restrictions/${userId}`;
+function games() {
+  return config.appealGames || [];
 }
 
-async function getBan(userId) {
-  const res = await fetch(restrictionUrl(userId), { headers: { 'x-api-key': config.robloxOpenCloudKey } });
+// appeals saved before multi-game support have no universeId: they were all Free Admin
+function legacyUniverseId() {
+  return String(config.robloxMainUniverseId || games()[0]?.universeId || '');
+}
+function universeOf(appeal) {
+  return String(appeal.universeId || legacyUniverseId());
+}
+function gameName(universeId) {
+  return games().find((g) => g.universeId === String(universeId))?.name || 'Free Admin';
+}
+
+function restrictionUrl(universeId, userId) {
+  return `${API}/universes/${universeId}/user-restrictions/${userId}`;
+}
+
+async function getBan(universeId, userId) {
+  const res = await fetch(restrictionUrl(universeId, userId), { headers: { 'x-api-key': config.robloxOpenCloudKey } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Couldn't read the ban (${res.status}): ${await res.text()}`);
   const data = await res.json();
@@ -69,14 +89,26 @@ async function getBan(userId) {
   const start = r.startTime ? Date.parse(r.startTime) : Date.now();
   const seconds = r.duration ? parseInt(String(r.duration).replace('s', ''), 10) : null;
   return {
+    universeId: String(universeId),
+    game: gameName(universeId),
     reason: r.displayReason || 'No reason given',
     start,
     endsAt: seconds ? start + seconds * 1000 : null, // null = permanent
   };
 }
 
-async function unban(userId) {
-  const res = await fetch(`${restrictionUrl(userId)}?updateMask=gameJoinRestriction`, {
+// every game they're banned from right now (a game that can't be checked is skipped, but if NONE can
+// be checked it throws, so the player sees "try again" instead of "you're not banned")
+async function getBans(userId) {
+  const results = await Promise.allSettled(games().map((g) => getBan(g.universeId, userId)));
+  const failed = results.filter((r) => r.status === 'rejected');
+  failed.forEach((r) => console.error('[appeals] ban check failed:', r.reason?.message));
+  if (games().length > 0 && failed.length === results.length) throw new Error('No game could be checked');
+  return results.filter((r) => r.status === 'fulfilled' && r.value).map((r) => r.value);
+}
+
+async function unban(universeId, userId) {
+  const res = await fetch(`${restrictionUrl(universeId, userId)}?updateMask=gameJoinRestriction`, {
     method: 'PATCH',
     headers: { 'x-api-key': config.robloxOpenCloudKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameJoinRestriction: { active: false } }),
@@ -98,7 +130,7 @@ function buildEmbed(appeal) {
   const status = appeal.status;
   const embed = new EmbedBuilder()
     .setColor(COLORS[status])
-    .setTitle(`Ban Appeal: ${appeal.username}`)
+    .setTitle(`Ban Appeal: ${appeal.username} (${appeal.game || gameName(universeOf(appeal))})`)
     .setURL(`https://www.roblox.com/users/${appeal.userId}/profile`)
     .addFields(
       { name: 'Ban reason', value: appeal.banReason.slice(0, 1000) },
@@ -144,20 +176,30 @@ function registerAppealRoutes(app, client, checkAuth) {
     if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid userId' });
 
     try {
-      const ban = await getBan(userId);
+      const bans = await getBans(userId);
       const all = loadAll();
-      // Their most recent appeal
+      // their appeals, newest first
       const appeals = Object.values(all).filter((a) => a.userId === userId).sort((a, b) => b.createdAt - a.createdAt);
-      const latest = appeals[0];
+      const appealFor = (ban) => appeals.find((a) => a.banStart === ban.start && universeOf(a) === ban.universeId);
+      const short = (a) => (a ? { status: a.status, note: a.note || null, game: a.game || gameName(universeOf(a)) } : null);
 
-      if (!ban) {
-        return res.json({ banned: false, appeal: latest ? { status: latest.status, note: latest.note || null } : null });
+      const list = bans.map((ban) => ({
+        game: ban.game,
+        reason: ban.reason,
+        permanent: !ban.endsAt,
+        endsAt: ban.endsAt ? Math.floor(ban.endsAt / 1000) : null,
+        appeal: short(appealFor(ban)),
+      }));
+      if (list.length === 0) {
+        return res.json({ banned: false, bans: [], appeal: short(appeals[0]) });
       }
-      const forThisBan = appeals.find((a) => a.banStart === ban.start);
+      // banned/ban/appeal = the first ban (what the older appeals game reads); bans = all of them
+      const first = list[0];
       return res.json({
         banned: true,
-        ban: { reason: ban.reason, permanent: !ban.endsAt, endsAt: ban.endsAt ? Math.floor(ban.endsAt / 1000) : null },
-        appeal: forThisBan ? { status: forThisBan.status, note: forThisBan.note || null } : null,
+        bans: list,
+        ban: { game: first.game, reason: first.reason, permanent: first.permanent, endsAt: first.endsAt },
+        appeal: first.appeal,
       });
     } catch (err) {
       console.error('[appeals] status failed:', err.message);
@@ -170,22 +212,28 @@ function registerAppealRoutes(app, client, checkAuth) {
     const userId = Number(req.body?.userId);
     const username = String(req.body?.username || '').slice(0, 40);
     const text = String(req.body?.text || '').trim().slice(0, 1000);
+    const wanted = req.body?.game ? String(req.body.game).slice(0, 60) : null;
     if (!Number.isInteger(userId) || userId <= 0 || !username) return res.status(400).json({ error: 'Invalid user' });
     if (text.length < 30) return res.status(400).json({ error: 'Please write at least 30 characters.' });
 
     try {
-      const ban = await getBan(userId);
-      if (!ban) return res.status(400).json({ error: "You're not banned, so there's nothing to appeal." });
+      const bans = await getBans(userId);
+      if (bans.length === 0) return res.status(400).json({ error: "You're not banned, so there's nothing to appeal." });
+      const ban = wanted ? bans.find((b) => b.game.toLowerCase() === wanted.toLowerCase()) : bans[0];
+      if (!ban) return res.status(400).json({ error: `You're not banned from ${wanted}.` });
 
       const all = loadAll();
-      const id = `${userId}-${ban.start}`;
-      if (all[id]) return res.status(400).json({ error: "You've already appealed this ban." });
+      // Free Admin keeps the old id format, so appeals sent before this update still count
+      const id = ban.universeId === legacyUniverseId() ? `${userId}-${ban.start}` : `${ban.universeId}-${userId}-${ban.start}`;
+      if (all[id]) return res.status(400).json({ error: `You've already appealed your ${ban.game} ban.` });
 
       const appeal = {
         id,
         userId,
         username,
         text,
+        universeId: ban.universeId,
+        game: ban.game,
         banStart: ban.start,
         banReason: ban.reason,
         banLength: lengthText(ban),
@@ -199,7 +247,7 @@ function registerAppealRoutes(app, client, checkAuth) {
       all[id] = appeal;
       saveAll(all);
 
-      console.log(`[appeals] New appeal from ${username} (${userId})`);
+      console.log(`[appeals] New ${ban.game} appeal from ${username} (${userId})`);
       return res.json({ ok: true });
     } catch (err) {
       console.error('[appeals] submit failed:', err.message);
@@ -242,7 +290,7 @@ async function handleAppealButton(interaction) {
   // Accept: unban them in the main game
   await interaction.deferUpdate();
   try {
-    await unban(appeal.userId);
+    await unban(universeOf(appeal), appeal.userId);
   } catch (err) {
     console.error('[appeals] unban failed:', err.message);
     return interaction.followUp({ content: `Unban failed: ${err.message}`, flags: MessageFlags.Ephemeral });
@@ -253,7 +301,7 @@ async function handleAppealButton(interaction) {
   saveAll(all);
 
   await interaction.editReply({ embeds: [buildEmbed(appeal)], components: [] });
-  // Logged as a game unban (it unbans them in Free Admin), in the game log with the other game cases
+  // Logged as a game unban (in the game the ban was from), in the game log with the other game cases
   await logAction(interaction.client, {
     source: 'game',
     category: 'case',
@@ -261,7 +309,7 @@ async function handleAppealButton(interaction) {
     moderator: interaction.user.username,
     target: `[${appeal.username}](https://www.roblox.com/users/${appeal.userId}/profile)`,
     reason: 'Ban appeal accepted',
-    extra: { Game: 'Free Admin', Via: 'Ban appeal (Discord)' },
+    extra: { Game: appeal.game || gameName(universeOf(appeal)), Via: 'Ban appeal (Discord)' },
   }).catch(() => {});
 }
 

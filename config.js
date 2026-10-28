@@ -8,6 +8,21 @@ function requireEnv(name) {
   return value;
 }
 
+function parseAppealGames(list, mainUniverseId) {
+  const games = (list || '')
+    .split(',')
+    .map((pair) => {
+      const i = pair.lastIndexOf(':');
+      if (i < 0) return null;
+      const name = pair.slice(0, i).trim();
+      const universeId = pair.slice(i + 1).trim();
+      return name && /^\d+$/.test(universeId) ? { name, universeId } : null;
+    })
+    .filter(Boolean);
+  if (games.length === 0 && mainUniverseId) games.push({ name: 'Free Admin', universeId: String(mainUniverseId) });
+  return games;
+}
+
 module.exports = {
   token: requireEnv('DISCORD_TOKEN'),
   clientId: requireEnv('CLIENT_ID'),
@@ -70,6 +85,10 @@ module.exports = {
   // Ban appeals (see webhook/appeals.js)
   appealsChannelId: process.env.APPEALS_CHANNEL_ID || null,
   robloxMainUniverseId: process.env.ROBLOX_MAIN_UNIVERSE_ID || null,
+  // Every game players can appeal a ban from, as "Name:UniverseId" pairs separated by commas, e.g.
+  //   APPEAL_GAMES=Free Admin:1234567890,Pine Hollow:9876543210
+  // If it's not set, only Free Admin (ROBLOX_MAIN_UNIVERSE_ID) is checked, like before.
+  appealGames: parseAppealGames(process.env.APPEAL_GAMES, process.env.ROBLOX_MAIN_UNIVERSE_ID),
 
   // Posts here right after startup, and right before shutting down for a deploy/restart.
   statusChannelId: process.env.STATUS_CHANNEL_ID || null,
